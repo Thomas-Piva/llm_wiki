@@ -53,6 +53,7 @@ interface LlmConfig {
 
 export type SearchProvider =
   | "tavily"
+  | "exa"
   | "serpapi"
   | "searxng"
   | "ollama"
