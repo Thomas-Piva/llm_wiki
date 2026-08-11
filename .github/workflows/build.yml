@@ -108,7 +108,14 @@ jobs:
           npm --prefix mcp-server ci
           npm run mcp:build
 
-      - name: Build Tauri app
+      # Split signed/unsigned so the Apple env keys are truly ABSENT (not
+      # just empty-string) on forks without a codesign certificate secret —
+      # tauri-action's macOS signing path still attempts a keychain import
+      # when APPLE_CERTIFICATE is set to "" rather than omitted entirely,
+      # which fails hard ("SecKeychainItemImport: ... not valid") instead
+      # of falling back to an unsigned build.
+      - name: Build Tauri app (signed)
+        if: secrets.APPLE_CERTIFICATE != ''
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -124,6 +131,19 @@ jobs:
           # empty so tauri-action skips the release-upload step and
           # just produces bundle artifacts — useful for testing a
           # branch build without polluting the Releases page.
+          tagName: ${{ github.event_name == 'push' && github.ref_name || '' }}
+          releaseName: ${{ github.event_name == 'push' && format('LLM Wiki {0}', github.ref_name) || '' }}
+          releaseBody: 'See the assets below for download links.'
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
+
+      - name: Build Tauri app (unsigned)
+        if: secrets.APPLE_CERTIFICATE == ''
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
           tagName: ${{ github.event_name == 'push' && github.ref_name || '' }}
           releaseName: ${{ github.event_name == 'push' && format('LLM Wiki {0}', github.ref_name) || '' }}
           releaseBody: 'See the assets below for download links.'
