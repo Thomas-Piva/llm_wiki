@@ -108,6 +108,20 @@ jobs:
           npm --prefix mcp-server ci
           npm run mcp:build
 
+      # `if:` can't read `secrets` directly (GitHub blocks that), so stash
+      # a plain boolean in a step output first.
+      - name: Check for Apple codesign certificate
+        id: apple_cert
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        shell: bash
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # Split signed/unsigned so the Apple env keys are truly ABSENT (not
       # just empty-string) on forks without a codesign certificate secret —
       # tauri-action's macOS signing path still attempts a keychain import
@@ -115,7 +129,7 @@ jobs:
       # which fails hard ("SecKeychainItemImport: ... not valid") instead
       # of falling back to an unsigned build.
       - name: Build Tauri app (signed)
-        if: secrets.APPLE_CERTIFICATE != ''
+        if: steps.apple_cert.outputs.present == 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -139,7 +153,7 @@ jobs:
           args: ${{ matrix.args }}
 
       - name: Build Tauri app (unsigned)
-        if: secrets.APPLE_CERTIFICATE == ''
+        if: steps.apple_cert.outputs.present != 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
