@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog"
 import { invoke } from "@tauri-apps/api/core"
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart"
 import i18n from "@/i18n"
+import { detectSystemOutputLanguage } from "@/lib/detect-system-language"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useLintStore } from "@/stores/lint-store"
@@ -454,7 +455,7 @@ function App() {
         llmState.customLlmPresets,
       ))
       const projectOutputLang = await loadOutputLanguage(proj.id)
-      useWikiStore.getState().setOutputLanguage(projectOutputLang ?? "auto")
+      useWikiStore.getState().setOutputLanguage(projectOutputLang ?? detectSystemOutputLanguage())
       setSelectedFile(null)
       setFileTree([])
       setActiveView("wiki")
