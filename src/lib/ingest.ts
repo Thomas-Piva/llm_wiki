@@ -1,6 +1,7 @@
 import {
   createDirectory,
   deleteFile,
+  extractAudioTrack,
   fileExists,
   getFileModifiedTime,
   getFileSize,
@@ -9,6 +10,9 @@ import {
   writeFile,
   listDirectory,
 } from "@/commands/fs"
+import { AUDIO_VIDEO_SOURCE_EXTENSIONS, IMAGE_SOURCE_EXTENSIONS } from "@/lib/media-extensions"
+import { transcribeAudio } from "@/lib/media-transcribe"
+import { captionImage } from "@/lib/vision-caption"
 import { streamChat, type ChatMessage, type StreamCallbacks, type RequestOverrides } from "@/lib/llm-client"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -709,6 +713,78 @@ async function autoIngestImpl(
     }
     if (mineruSucceeded && !signal?.aborted) {
       activity.updateItem(activityId, { detail: "Reading source..." })
+    }
+  }
+
+  // ── Audio/video transcription ──
+  const isAudioVideo = AUDIO_VIDEO_SOURCE_EXTENSIONS.has(lowerExt ?? "")
+  if (isAudioVideo) {
+    const mediaCfg = useWikiStore.getState().mediaIngestConfig
+    if (mediaCfg.audioVideoEnabled) {
+      try {
+        const cacheDir = sp.substring(0, sp.lastIndexOf("/"))
+        const cachePath = `${cacheDir}/.cache/${fileName}.txt`
+        activity.updateItem(activityId, { detail: "Extracting audio..." })
+        const audioPath = await extractAudioTrack(sp)
+        activity.updateItem(activityId, { detail: "Transcribing audio..." })
+        const transcript = await transcribeAudio(audioPath, mediaCfg, signal)
+        await createDirectory(`${cacheDir}/.cache`)
+        await writeFile(cachePath, transcript)
+        console.log(`[ingest:media] cached transcript for "${fileName}" (${transcript.length} chars)`)
+      } catch (err) {
+        throwIfIngestAborted(signal, activityId)
+        const msg = trimInlineStatus(err instanceof Error ? err.message : String(err))
+        console.warn(`[ingest:media] transcription failed for "${fileName}": ${msg}`)
+        activity.updateItem(activityId, { detail: `Transcription failed: ${msg}` })
+      }
+    } else {
+      console.warn(`[ingest:media] "${fileName}" is audio/video but mediaIngestConfig.audioVideoEnabled is false — skipping transcription`)
+    }
+  }
+
+  // ── Image captioning ──
+  //
+  // Route through the SAME gate the existing MinerU-embedded-image
+  // captioning already uses (`resolveCaptionConfig`, private to this file,
+  // called for images extracted from PDFs). This codebase treats "caption an
+  // image with an LLM" as ONE feature behind ONE master switch
+  // (`multimodalConfig.enabled`, the separate "Image Captioning" Settings
+  // category, default OFF — a user who disabled it doesn't expect standalone
+  // images to bypass that and get sent to an LLM anyway).
+  // `mediaIngestConfig.imagesEnabled` (this feature's own toggle) controls
+  // whether image FILES are accepted as sources at all;
+  // `multimodalConfig.enabled` controls whether captioning actually runs.
+  // Both must be on for a standalone image to produce a `.cache/*.txt` —
+  // if only the first is on, the image is still accepted as a source but
+  // produces no extracted text, same graceful-degradation outcome as a
+  // failed MinerU parse.
+  const isImageSource = IMAGE_SOURCE_EXTENSIONS.has(lowerExt ?? "")
+  if (isImageSource) {
+    const mediaCfg = useWikiStore.getState().mediaIngestConfig
+    if (mediaCfg.imagesEnabled) {
+      const mmCfg = useWikiStore.getState().multimodalConfig
+      const captionLlm = resolveCaptionConfig(mmCfg, llmConfig)
+      if (captionLlm) {
+        try {
+          const cacheDir = sp.substring(0, sp.lastIndexOf("/"))
+          const cachePath = `${cacheDir}/.cache/${fileName}.txt`
+          activity.updateItem(activityId, { detail: "Captioning image..." })
+          const { base64, mimeType } = await readFileAsBase64(sp)
+          const caption = await captionImage(base64, mimeType, captionLlm, signal)
+          await createDirectory(`${cacheDir}/.cache`)
+          await writeFile(cachePath, caption)
+          console.log(`[ingest:media] cached caption for "${fileName}"`)
+        } catch (err) {
+          throwIfIngestAborted(signal, activityId)
+          const msg = trimInlineStatus(err instanceof Error ? err.message : String(err))
+          console.warn(`[ingest:media] captioning failed for "${fileName}": ${msg}`)
+          activity.updateItem(activityId, { detail: `Captioning failed: ${msg}` })
+        }
+      } else {
+        console.warn(`[ingest:media] "${fileName}" is an image but Image Captioning (Settings → Image Captioning, multimodalConfig.enabled) is off — skipping captioning`)
+      }
+    } else {
+      console.warn(`[ingest:media] "${fileName}" is an image but mediaIngestConfig.imagesEnabled is false — skipping captioning`)
     }
   }
 
