@@ -2,10 +2,9 @@ import { describe, expect, it, beforeEach } from "vitest"
 import { useWikiStore } from "@/stores/wiki-store"
 import {
   INGESTABLE_SOURCE_EXTENSIONS,
-  AUDIO_VIDEO_SOURCE_EXTENSIONS,
-  IMAGE_SOURCE_EXTENSIONS,
   isIngestableSourcePath,
 } from "./source-lifecycle"
+import { AUDIO_VIDEO_SOURCE_EXTENSIONS, IMAGE_SOURCE_EXTENSIONS } from "./media-extensions"
 
 describe("media extension gate", () => {
   beforeEach(() => {

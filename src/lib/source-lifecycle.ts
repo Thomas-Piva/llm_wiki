@@ -41,14 +41,7 @@ import type { SourceWatchConfig } from "@/stores/wiki-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { preprocessSourceFiles } from "@/lib/source-preprocess"
 import { moveParsedMarkdown, removeParsedMarkdown } from "@/lib/parsed-source-output"
-
-export const AUDIO_VIDEO_SOURCE_EXTENSIONS = new Set([
-  "mp4", "webm", "mov", "avi", "mkv", "mp3", "wav", "ogg", "flac", "m4a",
-])
-
-export const IMAGE_SOURCE_EXTENSIONS = new Set([
-  "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "avif", "heic",
-])
+import { AUDIO_VIDEO_SOURCE_EXTENSIONS, IMAGE_SOURCE_EXTENSIONS } from "@/lib/media-extensions"
 
 export const INGESTABLE_SOURCE_EXTENSIONS = new Set([
   "md",

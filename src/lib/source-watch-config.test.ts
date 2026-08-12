@@ -66,7 +66,10 @@ describe("source watch config", () => {
       excludeGlobs: ["*.private.*, ~$*"],
     })
 
-    expect(config.includeExtensions).toEqual(["md", "pdf", "docx"])
+    // Media extensions are appended to every non-empty include-list (see
+    // source-watch-config.media-defaults.test.ts); only the normalization of
+    // the user-supplied entries is asserted here.
+    expect(config.includeExtensions.slice(0, 3)).toEqual(["md", "pdf", "docx"])
     expect(config.excludeExtensions).toEqual(["json", "yaml", "xml", "dll"])
     expect(config.excludeDirs).toEqual([".git", "node_modules", "drafts", "wip"])
     expect(config.excludeGlobs).toEqual(["*.private.*", "~$*"])

@@ -1,6 +1,7 @@
 import type { SourceWatchConfig } from "@/stores/wiki-store"
 import { normalizePath } from "@/lib/path-utils"
 import sourceWatchDefaults from "@/lib/source-watch-defaults.json"
+import { AUDIO_VIDEO_SOURCE_EXTENSIONS, IMAGE_SOURCE_EXTENSIONS } from "@/lib/media-extensions"
 
 export const DEFAULT_SOURCE_WATCH_CONFIG: SourceWatchConfig = sourceWatchDefaults
 
@@ -41,6 +42,22 @@ function normalizeList(values: readonly string[] | undefined): string[] {
     .filter(Boolean))]
 }
 
+/**
+ * Media extensions are unioned into a persisted include-list so a config saved
+ * before media ingest existed cannot shadow them and make the watcher drop
+ * media before `isIngestableSourcePath` (the real toggle gate) runs. An empty
+ * include-list means "no extension filter" (see `importSourceFiles`), so it is
+ * left empty — unioning there would turn an allow-all into a media-only list.
+ */
+function withMediaExtensions(includeExtensions: readonly string[]): string[] {
+  if (includeExtensions.length === 0) return []
+  return normalizeExtensions([
+    ...includeExtensions,
+    ...AUDIO_VIDEO_SOURCE_EXTENSIONS,
+    ...IMAGE_SOURCE_EXTENSIONS,
+  ])
+}
+
 export function normalizeSourceWatchConfig(config?: Partial<SourceWatchConfig> | null): SourceWatchConfig {
   const rawParsingConcurrency = config?.parsingConcurrency
     ?? DEFAULT_SOURCE_WATCH_CONFIG.parsingConcurrency
@@ -59,7 +76,9 @@ export function normalizeSourceWatchConfig(config?: Partial<SourceWatchConfig> |
       config?.persistExtractedMarkdown ?? DEFAULT_SOURCE_WATCH_CONFIG.persistExtractedMarkdown,
     parsingConcurrency,
     ingestConcurrency,
-    includeExtensions: normalizeExtensions(config?.includeExtensions ?? DEFAULT_SOURCE_WATCH_CONFIG.includeExtensions),
+    includeExtensions: withMediaExtensions(
+      normalizeExtensions(config?.includeExtensions ?? DEFAULT_SOURCE_WATCH_CONFIG.includeExtensions),
+    ),
     excludeExtensions: normalizeExtensions(config?.excludeExtensions ?? DEFAULT_SOURCE_WATCH_CONFIG.excludeExtensions),
     excludeDirs: normalizeList(config?.excludeDirs ?? DEFAULT_SOURCE_WATCH_CONFIG.excludeDirs),
     excludeGlobs: normalizeList(config?.excludeGlobs ?? DEFAULT_SOURCE_WATCH_CONFIG.excludeGlobs),
