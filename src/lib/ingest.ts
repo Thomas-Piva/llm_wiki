@@ -721,11 +721,15 @@ async function autoIngestImpl(
   if (isAudioVideo) {
     const mediaCfg = useWikiStore.getState().mediaIngestConfig
     if (mediaCfg.audioVideoEnabled) {
+      // `extractAudioTrack` writes a temp mp3 to $TMPDIR/llm-wiki-media-import/.
+      // Nothing else ever reads it after transcription, and %TEMP% on Windows is
+      // never auto-cleared, so delete it in `finally` — success or failure.
+      let audioPath: string | undefined
       try {
         const cacheDir = sp.substring(0, sp.lastIndexOf("/"))
         const cachePath = `${cacheDir}/.cache/${fileName}.txt`
         activity.updateItem(activityId, { detail: "Extracting audio..." })
-        const audioPath = await extractAudioTrack(sp)
+        audioPath = await extractAudioTrack(sp)
         activity.updateItem(activityId, { detail: "Transcribing audio..." })
         const transcript = await transcribeAudio(audioPath, mediaCfg, signal)
         await createDirectory(`${cacheDir}/.cache`)
@@ -736,6 +740,9 @@ async function autoIngestImpl(
         const msg = trimInlineStatus(err instanceof Error ? err.message : String(err))
         console.warn(`[ingest:media] transcription failed for "${fileName}": ${msg}`)
         activity.updateItem(activityId, { detail: `Transcription failed: ${msg}` })
+      } finally {
+        // Non-fatal: a failed cleanup must not mask the real error.
+        if (audioPath) await deleteFile(audioPath).catch(() => {})
       }
     } else {
       console.warn(`[ingest:media] "${fileName}" is audio/video but mediaIngestConfig.audioVideoEnabled is false — skipping transcription`)
