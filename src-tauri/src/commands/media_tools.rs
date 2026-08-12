@@ -98,12 +98,29 @@ fn make_executable(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// yt-dlp prints one `after_move:filepath` line per file it downloaded.
+/// Exactly one line = the single media link we asked for. More than one
+/// means the generic extractor scraped several embeds off an ordinary web
+/// page (exit code 0, no error) — that is not a media URL, so it gets the
+/// same `unsupported URL` prefix callers already match on.
+fn single_media_path<'a>(stdout: &'a str, url: &str) -> Result<&'a str, String> {
+    let mut paths = stdout.lines().map(str::trim).filter(|line| !line.is_empty());
+    let first = paths.next().unwrap_or("");
+    if paths.next().is_some() {
+        return Err(format!(
+            "unsupported URL: {url} yielded several embedded media files, not a single media link"
+        ));
+    }
+    Ok(first)
+}
+
 /// Downloads only the audio track of `url` via yt-dlp into the OS temp
 /// directory. Returns the local file path on success. On failure, the
-/// error message is prefixed with "unsupported URL" specifically when
-/// yt-dlp itself reports it doesn't recognize the site/URL (as opposed to
-/// a network error, geo-block, or private video) — callers use that
-/// prefix to decide whether to fall back to a different import path.
+/// error message is prefixed with "unsupported URL" when yt-dlp itself
+/// reports it doesn't recognize the site/URL (as opposed to a network
+/// error, geo-block, or private video), and also when the URL turns out to
+/// be an ordinary page yt-dlp scraped several embeds from — callers use
+/// that prefix to decide whether to fall back to a different import path.
 #[tauri::command]
 pub async fn download_media_url(app: AppHandle, url: String) -> Result<String, String> {
     let ytdlp = ensure_ytdlp(&app).await?;
@@ -138,9 +155,30 @@ pub async fn download_media_url(app: AppHandle, url: String) -> Result<String, S
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let path = stdout.lines().last().unwrap_or("").trim();
+    let path = single_media_path(&stdout, &url)?;
     if path.is_empty() || !Path::new(path).is_file() {
         return Err(format!("yt-dlp reported success but produced no file for {url}"));
     }
     Ok(path.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::single_media_path;
+
+    #[test]
+    fn single_line_is_the_media_path() {
+        assert_eq!(single_media_path("/tmp/a.mp3\n", "u").unwrap(), "/tmp/a.mp3");
+    }
+
+    #[test]
+    fn several_lines_are_reported_as_unsupported() {
+        let err = single_media_path("/tmp/a.webm\n/tmp/b.webm\n", "u").unwrap_err();
+        assert!(err.to_lowercase().starts_with("unsupported url"), "{err}");
+    }
+
+    #[test]
+    fn no_lines_stays_empty_for_the_no_file_check() {
+        assert_eq!(single_media_path("\n", "u").unwrap(), "");
+    }
 }
