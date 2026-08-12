@@ -4,11 +4,21 @@
     "subtitle": "Costruisci e mantieni la tua knowledge base personale con gli LLM"
   },
   "common": {
-    "retry": "Riprova", "cancel": "Annulla", "ignore": "Ignora", "close": "Chiudi",
-    "dismiss": "Nascondi", "loading": "Caricamento...", "optional": "opzionale"
+    "retry": "Riprova",
+    "cancel": "Annulla",
+    "ignore": "Ignora",
+    "close": "Chiudi",
+    "dismiss": "Nascondi",
+    "loading": "Caricamento...",
+    "optional": "opzionale"
   },
-  "layout": { "showSidebar": "Mostra la barra laterale", "hideSidebar": "Nascondi la barra laterale" },
-  "errors": { "generic": "Qualcosa è andato storto" },
+  "layout": {
+    "showSidebar": "Mostra la barra laterale",
+    "hideSidebar": "Nascondi la barra laterale"
+  },
+  "errors": {
+    "generic": "Qualcosa è andato storto"
+  },
   "mermaid": {
     "renderFailed": "Impossibile visualizzare il diagramma Mermaid",
     "showDetails": "Mostra i dettagli del parser",
@@ -47,10 +57,16 @@
     "rawSources": "Fonti grezze",
     "noWikiPages": "Ancora nessuna pagina wiki. Importa delle fonti per iniziare.",
     "typeLabels": {
-      "overview": "Panoramica", "entity": "Entità", "concept": "Concetti",
-      "source": "Fonti", "synthesis": "Sintesi", "finding": "Risultati",
-      "thesis": "Tesi", "methodology": "Metodologie",
-      "comparison": "Confronti", "query": "Query"
+      "overview": "Panoramica",
+      "entity": "Entità",
+      "concept": "Concetti",
+      "source": "Fonti",
+      "synthesis": "Sintesi",
+      "finding": "Risultati",
+      "thesis": "Tesi",
+      "methodology": "Metodologie",
+      "comparison": "Confronti",
+      "query": "Query"
     }
   },
   "editor": {
@@ -92,7 +108,10 @@
       "createFailed": "Non è stato possibile creare la pagina mancante.",
       "emptyDraftError": "Il modello ha restituito una bozza vuota."
     },
-    "frontmatter": { "origin": "Origine", "more": "Altro" },
+    "frontmatter": {
+      "origin": "Origine",
+      "more": "Altro"
+    },
     "rawMarkdownEditor": "Editor Markdown grezzo"
   },
   "research": {
@@ -491,7 +510,7 @@
           "activeDefault": "Usa il modello attivo",
           "hint": "Scegli modelli distinti per la chat interattiva e per l'elaborazione dei documenti. Il modello attivo resta il fallback."
         },
-      "projectOverride": {
+        "projectOverride": {
           "enabled": "Usa un modello specifico per il progetto",
           "provider": "Provider del progetto",
           "selectProvider": "Seleziona un provider",
@@ -794,6 +813,26 @@
         "mcpUsage": "Uso di MCP",
         "mcpUsageHint": "Compila una volta con `npm run mcp:build`, poi configura il tuo client MCP per avviare il server qui sotto. Usa LLM_WIKI_API_TOKEN a meno che non sia attivo l'accesso senza autenticazione.",
         "mcpPathUnavailable": "Entry point del server MCP non trovato. Esegui `npm run mcp:build` dal repository di LLM Wiki, poi riapri le Impostazioni.",
+        "remoteMcpEnable": "Abilita accesso MCP remoto",
+        "remoteMcpEnableHint": "Avvia un bridge HTTP+OAuth separato così agenti esterni a questo computer (ChatGPT, Codex, Claude.ai) possono raggiungere questo progetto via internet — a differenza dell'API locale sopra, usabile solo da Codex/Claude CLI su questa macchina. Richiede Node.js nel PATH.",
+        "remoteMcpPort": "Porta locale",
+        "remoteMcpHostname": "Dominio proprio (opzionale)",
+        "remoteMcpHostnamePlaceholder": "es. mcp.esempio.it — lascia vuoto per un link generato automaticamente",
+        "remoteMcpHostnameHint": "Vuoto = un Cloudflare Quick Tunnel genera automaticamente un link gratuito https://…trycloudflare.com (cambia ad ogni avvio — va bene per test, non per un'integrazione permanente). Imposta un dominio tuo solo se hai già un reverse proxy/tunnel puntato sulla porta sopra.",
+        "remoteMcpVaultRoot": "Cartella vault collegata (opzionale)",
+        "remoteMcpVaultRootPlaceholder": "Percorso assoluto a un vault stile Obsidian — lascia vuoto per saltare",
+        "remoteMcpVaultRootHint": "Se impostato, il bridge espone anche vault_read_note / vault_list_notes / vault_search_notes / vault_write_note / vault_append_note, più vault_get_conventions (legge il CLAUDE.md o README.md del vault così l'agente collegato impara le regole di scrittura prima di scrivere).",
+        "remoteMcpToken": "Chiave API statica",
+        "remoteMcpTokenPlaceholder": "Per client senza supporto OAuth — clicca Genera",
+        "remoteMcpPassword": "Password approvazione OAuth",
+        "remoteMcpPasswordPlaceholder": "Richiesta per ogni client che si autoregistra via OAuth",
+        "remoteMcpPasswordHint": "Qualsiasi client MCP può autoregistrarsi (OAuth Dynamic Client Registration) — la sola registrazione non dà accesso. Questa password è il vero blocco: viene chiesta una volta, in una pagina del browser, prima che un client registrato ottenga un token funzionante.",
+        "remoteMcpBusy": "In corso…",
+        "remoteMcpRunning": "In esecuzione",
+        "remoteMcpStopped": "Fermato",
+        "remoteMcpUrl": "Collegati a",
+        "remoteMcpUrlPending": "In attesa dell'URL del tunnel…",
+        "remoteMcpWarning": "Chiunque abbia la chiave API statica, o completi l'approvazione OAuth, ottiene lo stesso accesso di un client MCP locale — incluso l'accesso in scrittura se è collegata una cartella vault. Tratta entrambi i segreti come password.",
         "token": "Token di accesso",
         "tokenHint": "Invialo come `Authorization: Bearer <token>` oppure `X-LLM-Wiki-Token: <token>`. Gli endpoint di lettura possono ometterlo quando l'accesso senza autenticazione è attivo, ma chat Agent e annullamento lo richiedono sempre. LLM_WIKI_API_TOKEN ha la precedenza.",
         "tokenPlaceholder": "Incolla un token esistente o clicca su Genera",
@@ -1031,12 +1070,25 @@
     "fileSync": "Sincronizzazione file",
     "rescan": "Riesamina",
     "rescanTitle": "Cerca modifiche esterne nei file del progetto",
-    "changeKinds": { "created": "Creato", "modified": "Modificato", "deleted": "Eliminato" },
+    "changeKinds": {
+      "created": "Creato",
+      "modified": "Modificato",
+      "deleted": "Eliminato"
+    },
     "fileTypes": {
-      "entity": "Entità", "concept": "Concetto", "source": "Fonte", "query": "Query",
-      "synthesis": "Sintesi", "comparison": "Confronto", "finding": "Risultato",
-      "thesis": "Tesi", "methodology": "Metodologia", "overview": "Panoramica",
-      "index": "Indice", "log": "Log", "file": "File"
+      "entity": "Entità",
+      "concept": "Concetto",
+      "source": "Fonte",
+      "query": "Query",
+      "synthesis": "Sintesi",
+      "comparison": "Confronto",
+      "finding": "Risultato",
+      "thesis": "Tesi",
+      "methodology": "Metodologia",
+      "overview": "Panoramica",
+      "index": "Indice",
+      "log": "Log",
+      "file": "File"
     }
   },
   "fileTree": {

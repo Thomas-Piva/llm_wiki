@@ -220,6 +220,14 @@ interface ScheduledImportConfig {
  *   - `token` is the bearer secret. Empty + auth required =
  *     every non-/health request returns 401. The env var
  *     `LLM_WIKI_API_TOKEN` overrides this field at the backend.
+ *
+ * Remote MCP access (`remoteMcp*`) is a separate, optional capability: a
+ * spawned Node child process (mcp-server/dist/src/http-server.js, see
+ * src-tauri/src/commands/remote_mcp.rs) exposing this project — and
+ * optionally a linked Company Brain vault — over MCP Streamable HTTP to
+ * agents outside this machine (ChatGPT, Codex, Claude.ai), via a static
+ * token or self-registering OAuth. Unlike the local API above, this is
+ * never auto-started; the user starts/stops it explicitly per session.
  */
 interface ApiConfig {
   enabled: boolean
@@ -227,6 +235,12 @@ interface ApiConfig {
   allowLanAccess: boolean
   mcpEnabled: boolean
   token: string
+  remoteMcpEnabled: boolean
+  remoteMcpPort: number
+  remoteMcpToken: string
+  remoteMcpApprovalPassword: string
+  remoteMcpPublicHostname: string
+  remoteMcpVaultRoot: string
 }
 
 export type CloseBehavior = "ask" | "minimize" | "exit"
@@ -649,6 +663,12 @@ export const useWikiStore = create<WikiState>((set) => ({
     allowLanAccess: false,
     mcpEnabled: false,
     token: "",
+    remoteMcpEnabled: false,
+    remoteMcpPort: 8931,
+    remoteMcpToken: "",
+    remoteMcpApprovalPassword: "",
+    remoteMcpPublicHostname: "",
+    remoteMcpVaultRoot: "",
   },
 
   generalConfig: {

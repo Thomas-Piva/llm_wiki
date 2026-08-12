@@ -4,11 +4,21 @@
     "subtitle": "用 LLM 构建和维护你的个人知识库"
   },
   "common": {
-    "retry": "重试", "cancel": "取消", "ignore": "忽略", "close": "关闭",
-    "dismiss": "关闭", "loading": "加载中……", "optional": "可选"
+    "retry": "重试",
+    "cancel": "取消",
+    "ignore": "忽略",
+    "close": "关闭",
+    "dismiss": "关闭",
+    "loading": "加载中……",
+    "optional": "可选"
   },
-  "layout": { "showSidebar": "展开侧栏", "hideSidebar": "收起侧栏" },
-  "errors": { "generic": "出现错误" },
+  "layout": {
+    "showSidebar": "展开侧栏",
+    "hideSidebar": "收起侧栏"
+  },
+  "errors": {
+    "generic": "出现错误"
+  },
   "mermaid": {
     "renderFailed": "无法渲染 Mermaid 图表",
     "showDetails": "查看解析器详情",
@@ -47,10 +57,16 @@
     "rawSources": "原始资料",
     "noWikiPages": "暂无 Wiki 页面，请先导入原始资料。",
     "typeLabels": {
-      "overview": "概览", "entity": "实体", "concept": "概念",
-      "source": "来源", "synthesis": "综合", "finding": "发现",
-      "thesis": "论点", "methodology": "方法论",
-      "comparison": "比较", "query": "查询"
+      "overview": "概览",
+      "entity": "实体",
+      "concept": "概念",
+      "source": "来源",
+      "synthesis": "综合",
+      "finding": "发现",
+      "thesis": "论点",
+      "methodology": "方法论",
+      "comparison": "比较",
+      "query": "查询"
     }
   },
   "editor": {
@@ -92,7 +108,10 @@
       "createFailed": "无法创建缺失页面。",
       "emptyDraftError": "模型返回了空白草稿。"
     },
-    "frontmatter": { "origin": "来源", "more": "更多" },
+    "frontmatter": {
+      "origin": "来源",
+      "more": "更多"
+    },
     "rawMarkdownEditor": "Markdown 源码编辑器"
   },
   "research": {
@@ -491,7 +510,7 @@
           "activeDefault": "使用当前活跃模型",
           "hint": "可为交互聊天和文档摄取分别选择模型；未指定时继续使用当前活跃模型。"
         },
-      "projectOverride": {
+        "projectOverride": {
           "enabled": "为当前项目使用独立模型",
           "provider": "项目 Provider",
           "selectProvider": "选择 Provider",
@@ -794,6 +813,26 @@
         "mcpUsage": "MCP 使用说明",
         "mcpUsageHint": "先执行一次 `npm run mcp:build`，然后让 MCP 客户端运行下面的服务配置。除非启用了无认证访问，否则需要设置 LLM_WIKI_API_TOKEN。",
         "mcpPathUnavailable": "没有找到 MCP 服务入口。请在 LLM Wiki 仓库中先执行 `npm run mcp:build`，然后重新打开设置。",
+        "remoteMcpEnable": "启用远程 MCP 访问",
+        "remoteMcpEnableHint": "启动一个独立的 HTTP+OAuth 桥接服务，让本机以外的智能体（ChatGPT、Codex、Claude.ai）通过互联网访问此项目——不同于上面的本地 API，后者只能被本机上的 Codex/Claude CLI 使用。需要在 PATH 中有 Node.js。",
+        "remoteMcpPort": "本地端口",
+        "remoteMcpHostname": "自有域名（可选）",
+        "remoteMcpHostnamePlaceholder": "例如 mcp.example.com — 留空则自动生成链接",
+        "remoteMcpHostnameHint": "留空 = 由 Cloudflare Quick Tunnel 自动生成一个免费的 https://…trycloudflare.com 链接（每次启动都会变化——适合测试，不适合永久集成）。只有在你已经有反向代理/隧道指向上面端口的情况下，才在此填写自有域名。",
+        "remoteMcpVaultRoot": "关联的 vault 目录（可选）",
+        "remoteMcpVaultRootPlaceholder": "Obsidian 风格 vault 的绝对路径 — 留空则跳过",
+        "remoteMcpVaultRootHint": "设置后，桥接服务还会暴露 vault_read_note / vault_list_notes / vault_search_notes / vault_write_note / vault_append_note，以及 vault_get_conventions（读取该 vault 自身的 CLAUDE.md 或 README.md，让连接的智能体在写入前先了解该 vault 的写作规则）。",
+        "remoteMcpToken": "静态 API 密钥",
+        "remoteMcpTokenPlaceholder": "供不支持 OAuth 的客户端使用 — 点击生成",
+        "remoteMcpPassword": "OAuth 批准密码",
+        "remoteMcpPasswordPlaceholder": "任何通过 OAuth 自行注册的客户端都需要此密码",
+        "remoteMcpPasswordHint": "任何 MCP 客户端都可以自行注册（OAuth 动态客户端注册）——仅注册本身不会授予访问权限。这个密码才是真正的关卡：在浏览器页面中询问一次，之后已注册的客户端才能获得可用的令牌。",
+        "remoteMcpBusy": "处理中…",
+        "remoteMcpRunning": "运行中",
+        "remoteMcpStopped": "已停止",
+        "remoteMcpUrl": "连接地址",
+        "remoteMcpUrlPending": "正在等待隧道链接…",
+        "remoteMcpWarning": "任何拥有静态 API 密钥、或完成 OAuth 批准流程的人，都会获得与本地 MCP 客户端相同的访问权限——如果关联了 vault 目录，还包括写入权限。请将这两个密钥都当作密码对待。",
         "token": "访问令牌",
         "tokenHint": "通过 `Authorization: Bearer <token>` 或 `X-LLM-Wiki-Token: <token>` 发送。启用无认证访问后，读取类接口可以省略 token，但 Agent 对话和取消接口始终需要 token。环境变量 LLM_WIKI_API_TOKEN 优先生效。",
         "tokenPlaceholder": "粘贴已有 token，或点击生成",
@@ -1031,12 +1070,25 @@
     "fileSync": "文件同步",
     "rescan": "重新扫描",
     "rescanTitle": "扫描项目文件的外部变更",
-    "changeKinds": { "created": "已创建", "modified": "已修改", "deleted": "已删除" },
+    "changeKinds": {
+      "created": "已创建",
+      "modified": "已修改",
+      "deleted": "已删除"
+    },
     "fileTypes": {
-      "entity": "实体", "concept": "概念", "source": "来源", "query": "查询",
-      "synthesis": "综合", "comparison": "比较", "finding": "发现",
-      "thesis": "论点", "methodology": "方法论", "overview": "概览",
-      "index": "索引", "log": "日志", "file": "文件"
+      "entity": "实体",
+      "concept": "概念",
+      "source": "来源",
+      "query": "查询",
+      "synthesis": "综合",
+      "comparison": "比较",
+      "finding": "发现",
+      "thesis": "论点",
+      "methodology": "方法论",
+      "overview": "概览",
+      "index": "索引",
+      "log": "日志",
+      "file": "文件"
     }
   },
   "fileTree": {

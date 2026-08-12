@@ -388,6 +388,22 @@ function App() {
                 ? savedApi.mcpEnabled
                 : false,
             token: typeof savedApi.token === "string" ? savedApi.token : "",
+            remoteMcpEnabled:
+              typeof savedApi.remoteMcpEnabled === "boolean" ? savedApi.remoteMcpEnabled : false,
+            remoteMcpPort:
+              typeof savedApi.remoteMcpPort === "number" ? savedApi.remoteMcpPort : 8931,
+            remoteMcpToken:
+              typeof savedApi.remoteMcpToken === "string" ? savedApi.remoteMcpToken : "",
+            remoteMcpApprovalPassword:
+              typeof savedApi.remoteMcpApprovalPassword === "string"
+                ? savedApi.remoteMcpApprovalPassword
+                : "",
+            remoteMcpPublicHostname:
+              typeof savedApi.remoteMcpPublicHostname === "string"
+                ? savedApi.remoteMcpPublicHostname
+                : "",
+            remoteMcpVaultRoot:
+              typeof savedApi.remoteMcpVaultRoot === "string" ? savedApi.remoteMcpVaultRoot : "",
           })
         }
         const savedGeneral = await loadGeneralConfig()

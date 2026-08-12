@@ -103,6 +103,14 @@ export interface SettingsDraft {
   apiAllowLanAccess: boolean
   apiMcpEnabled: boolean
   apiToken: string
+
+  // Remote MCP access (spawned HTTP+OAuth bridge)
+  remoteMcpEnabled: boolean
+  remoteMcpPort: number
+  remoteMcpToken: string
+  remoteMcpApprovalPassword: string
+  remoteMcpPublicHostname: string
+  remoteMcpVaultRoot: string
 }
 
 export type DraftSetter = <K extends keyof SettingsDraft>(

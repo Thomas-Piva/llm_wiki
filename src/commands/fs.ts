@@ -285,3 +285,34 @@ export async function apiServerReloadConfig(): Promise<string> {
 export async function mcpServerEntryPath(): Promise<string> {
   return invoke<string>("mcp_server_entry_path")
 }
+
+export interface RemoteMcpStatus {
+  running: boolean
+  publicUrl: string | null
+}
+
+export async function remoteMcpStatus(): Promise<RemoteMcpStatus> {
+  return invoke<RemoteMcpStatus>("remote_mcp_status")
+}
+
+export async function remoteMcpStart(args: {
+  httpToken: string
+  approvalPassword: string
+  port: number
+  publicHostname?: string
+  vaultRoot?: string
+  llmWikiApiToken?: string
+}): Promise<void> {
+  return invoke<void>("remote_mcp_start", {
+    httpToken: args.httpToken,
+    approvalPassword: args.approvalPassword,
+    port: args.port,
+    publicHostname: args.publicHostname,
+    vaultRoot: args.vaultRoot,
+    llmWikiApiToken: args.llmWikiApiToken,
+  })
+}
+
+export async function remoteMcpStop(): Promise<void> {
+  return invoke<void>("remote_mcp_stop")
+}

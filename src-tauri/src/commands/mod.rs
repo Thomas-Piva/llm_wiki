@@ -8,6 +8,8 @@ pub mod file_history;
 pub mod file_sync;
 pub mod fs;
 pub mod project;
+mod node_runtime;
 pub mod project_maintenance;
+pub mod remote_mcp;
 pub mod search;
 pub mod vectorstore;
