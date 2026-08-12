@@ -464,6 +464,7 @@
       "sourceWatch": "Monitoraggio fonti",
       "scheduledImport": "Importazione pianificata",
       "mineru": "MinerU PDF",
+      "mediaIngest": "Ingest multimediale",
       "apiServer": "API + MCP",
       "output": "Output",
       "interface": "Interfaccia",
@@ -1016,6 +1017,23 @@
         "testing": "Test in corso...",
         "testSuccess": "Connessione riuscita",
         "testFailed": "Test non riuscito"
+      },
+      "mediaIngest": {
+        "title": "Ingest multimediale",
+        "description": "Trascrivi le fonti audio/video e genera didascalie per le immagini così diventano contenuto wiki ricercabile.",
+        "audioVideoEnabled": "Attiva trascrizione audio/video",
+        "audioVideoDescription": "I file video/audio locali e i link video (YouTube e tutto ciò che yt-dlp supporta) hanno l'audio estratto e trascritto. Disattivo per impostazione predefinita — i file mp4/audio e i link non vengono ingeriti finché non lo attivi.",
+        "provider": "Provider di trascrizione",
+        "providerGroq": "Groq (Whisper large-v3-turbo) - richiede un token API",
+        "providerCustom": "Endpoint personalizzato - qualsiasi API di trascrizione compatibile OpenAI",
+        "groqToken": "Token API Groq",
+        "groqTokenHint": "Ottieni il tuo token su console.groq.com",
+        "customEndpoint": "URL dell'endpoint",
+        "customEndpointHint": "URL di base di un endpoint /audio/transcriptions compatibile OpenAI.",
+        "customToken": "Token API (opzionale)",
+        "customTokenHint": "Inviato come header Authorization: Bearer",
+        "imagesEnabled": "Attiva didascalie immagini",
+        "imagesDescription": "I file immagine standalone (png/jpg/...) vengono descritti usando il modello LLM già configurato in Modelli LLM — non serve un provider separato. Il modello configurato deve supportare l'input di immagini."
       }
     }
   },

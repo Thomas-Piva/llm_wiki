@@ -464,6 +464,7 @@
       "sourceWatch": "资料文件夹监控",
       "scheduledImport": "定时导入",
       "mineru": "MinerU PDF",
+      "mediaIngest": "媒体导入",
       "apiServer": "API + MCP",
       "output": "输出偏好",
       "interface": "界面",
@@ -1016,6 +1017,23 @@
         "testing": "测试中...",
         "testSuccess": "连接成功",
         "testFailed": "测试失败"
+      },
+      "mediaIngest": {
+        "title": "媒体内容导入",
+        "description": "转写音视频来源并为图片生成描述，让它们成为可检索的 wiki 内容。",
+        "audioVideoEnabled": "启用音视频转写",
+        "audioVideoDescription": "本地视频/音频文件和视频链接（YouTube 以及 yt-dlp 支持的其他站点）会先提取音轨再转写。默认关闭——在启用之前，mp4/音频文件和链接不会被导入。",
+        "provider": "转写服务",
+        "providerGroq": "Groq（Whisper large-v3-turbo）——需要 API Token",
+        "providerCustom": "自定义地址——任意 OpenAI-compatible 转写 API",
+        "groqToken": "Groq API Token",
+        "groqTokenHint": "从 console.groq.com 获取您的 Token",
+        "customEndpoint": "接口地址",
+        "customEndpointHint": "填写 OpenAI-compatible /audio/transcriptions 接口的基础地址。",
+        "customToken": "API Token（可选）",
+        "customTokenHint": "使用 Authorization: Bearer 请求头发送",
+        "imagesEnabled": "启用图片描述",
+        "imagesDescription": "独立的图片文件（png/jpg/...）会使用「LLM 模型」中已配置的模型生成描述，无需单独的服务商。所选模型必须支持图片输入。"
       }
     }
   },

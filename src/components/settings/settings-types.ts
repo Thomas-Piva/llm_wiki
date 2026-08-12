@@ -1,5 +1,5 @@
 import type { CustomApiMode } from "./llm-presets"
-import type { AzureModelFamily, CloseBehavior, MineruEffort, MineruLocalBackend, MineruModelVersion, MineruParseMethod, ReasoningConfig, SourceWatchConfig } from "@/stores/wiki-store"
+import type { AzureModelFamily, CloseBehavior, MediaTranscribeBackend, MineruEffort, MineruLocalBackend, MineruModelVersion, MineruParseMethod, ReasoningConfig, SourceWatchConfig } from "@/stores/wiki-store"
 
 /**
  * Shape of the draft state each section reads from and writes into.
@@ -96,6 +96,14 @@ export interface SettingsDraft {
   mineruLocalServerUrl: string
   mineruToken: string
   mineruModelVersion: MineruModelVersion
+
+  // Media ingestion (audio/video transcription + image captioning)
+  mediaIngestAudioVideoEnabled: boolean
+  mediaIngestAudioVideoBackend: MediaTranscribeBackend
+  mediaIngestAudioVideoToken: string
+  mediaIngestAudioVideoCustomEndpoint: string
+  mediaIngestAudioVideoCustomToken: string
+  mediaIngestImagesEnabled: boolean
 
   // Local HTTP API server
   apiEnabled: boolean

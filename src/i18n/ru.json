@@ -464,6 +464,7 @@
       "sourceWatch": "Мониторинг источников",
       "scheduledImport": "Плановый импорт",
       "mineru": "MinerU PDF",
+      "mediaIngest": "Импорт медиа",
       "apiServer": "API + MCP",
       "output": "Вывод",
       "interface": "Интерфейс",
@@ -1016,6 +1017,23 @@
         "testing": "Проверка...",
         "testSuccess": "Соединение успешно",
         "testFailed": "Тест не удался"
+      },
+      "mediaIngest": {
+        "title": "Импорт медиафайлов",
+        "description": "Транскрибируйте аудио- и видеоисточники и создавайте подписи к изображениям, чтобы они стали содержимым вики, доступным для поиска.",
+        "audioVideoEnabled": "Включить транскрибацию аудио и видео",
+        "audioVideoDescription": "У локальных видео- и аудиофайлов, а также у ссылок на видео (YouTube и всё, что поддерживает yt-dlp) извлекается аудиодорожка и транскрибируется. По умолчанию выключено — файлы mp4/аудио и ссылки не импортируются, пока вы это не включите.",
+        "provider": "Сервис транскрибации",
+        "providerGroq": "Groq (Whisper large-v3-turbo) — нужен API-токен",
+        "providerCustom": "Свой эндпоинт — любой API транскрибации, совместимый с OpenAI",
+        "groqToken": "API-токен Groq",
+        "groqTokenHint": "Получите токен на console.groq.com",
+        "customEndpoint": "URL эндпоинта",
+        "customEndpointHint": "Базовый URL эндпоинта /audio/transcriptions, совместимого с OpenAI.",
+        "customToken": "API-токен (необязательно)",
+        "customTokenHint": "Отправляется в заголовке Authorization: Bearer",
+        "imagesEnabled": "Включить подписи к изображениям",
+        "imagesDescription": "Отдельные файлы изображений (png/jpg/...) описываются моделью LLM, уже настроенной в разделе «Модели LLM», — отдельный провайдер не нужен. Выбранная модель должна поддерживать ввод изображений."
       }
     }
   },
