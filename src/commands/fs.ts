@@ -245,6 +245,14 @@ export async function readFileAsBase64(path: string): Promise<FileBase64> {
   return invoke<FileBase64>("read_file_as_base64", { path })
 }
 
+/**
+ * Extract a compressed mono audio track (mp3) from any audio/video file
+ * via the bundled ffmpeg, returning the path of the temporary file.
+ */
+export async function extractAudioTrack(sourcePath: string): Promise<string> {
+  return invoke<string>("extract_audio_track", { sourcePath })
+}
+
 export async function createProject(
   name: string,
   path: string,
