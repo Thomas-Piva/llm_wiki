@@ -130,11 +130,18 @@ pub async fn download_media_url(app: AppHandle, url: String) -> Result<String, S
         .map_err(|e| format!("Failed to create {}: {e}", temp_dir.display()))?;
     let output_template = temp_dir.join("%(title).100B [%(id)s].%(ext)s");
 
+    let ffmpeg = ensure_ffmpeg(&app).await?;
+    let ffmpeg_dir = ffmpeg
+        .parent()
+        .ok_or_else(|| "Could not determine ffmpeg's parent directory".to_string())?;
+
     let output = tokio::process::Command::new(&ytdlp)
         .arg("--no-playlist")
         .arg("-x")
         .arg("--audio-format")
         .arg("mp3")
+        .arg("--ffmpeg-location")
+        .arg(ffmpeg_dir)
         .arg("-o")
         .arg(&output_template)
         .arg("--print")
@@ -160,6 +167,128 @@ pub async fn download_media_url(app: AppHandle, url: String) -> Result<String, S
         return Err(format!("yt-dlp reported success but produced no file for {url}"));
     }
     Ok(path.to_string())
+}
+
+fn ffmpeg_platform_target() -> Result<&'static str, String> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => Ok("linux-x64"),
+        ("linux", "aarch64") => Ok("linux-arm64"),
+        ("macos", "x86_64") => Ok("darwin-x64"),
+        ("macos", "aarch64") => Ok("darwin-arm64"),
+        ("windows", "x86_64") => Ok("win32-x64"),
+        (os, arch) => Err(format!(
+            "No automatic ffmpeg download available for {os}/{arch} — install ffmpeg manually and reopen Settings."
+        )),
+    }
+}
+
+async fn resolve_latest_ffmpeg_static_tag() -> Result<String, String> {
+    let response = reqwest::Client::new()
+        .get("https://api.github.com/repos/eugeneware/ffmpeg-static/releases/latest")
+        .header("User-Agent", "llm-wiki")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to reach GitHub releases API: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("GitHub releases API returned HTTP {}", response.status()));
+    }
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse GitHub releases response: {e}"))?;
+    json.get("tag_name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "GitHub releases response had no tag_name".to_string())
+}
+
+fn ffmpeg_binary_name() -> &'static str {
+    if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }
+}
+
+/// Cache -> PATH -> download. Returns the absolute path to a working
+/// `ffmpeg` binary. `eugeneware/ffmpeg-static` publishes one gzip'd static
+/// binary per platform — decompress with `flate2` (already a dependency),
+/// no tar/zip/xz needed.
+pub async fn ensure_ffmpeg(app: &AppHandle) -> Result<PathBuf, String> {
+    let root = install_root(app, "ffmpeg-runtime")?;
+    let cached = root.join(ffmpeg_binary_name());
+    if cached.is_file() {
+        return Ok(cached);
+    }
+    if let Ok(path) = find_cli_command("ffmpeg", &["ffmpeg.exe"]).await {
+        return Ok(path);
+    }
+
+    let platform = ffmpeg_platform_target()?;
+    let tag = resolve_latest_ffmpeg_static_tag().await?;
+    let asset = format!("ffmpeg-{platform}.gz");
+    let url = format!("https://github.com/eugeneware/ffmpeg-static/releases/download/{tag}/{asset}");
+    let _ = app.emit("media-tools:log", format!("Downloading ffmpeg {tag}…"));
+
+    std::fs::create_dir_all(&root).map_err(|e| format!("Failed to create {}: {e}", root.display()))?;
+    let compressed = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("Failed to download ffmpeg from {url}: {e}"))?
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read ffmpeg download body: {e}"))?;
+
+    let mut decoder = flate2::read::GzDecoder::new(std::io::Cursor::new(compressed));
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut decoder, &mut bytes)
+        .map_err(|e| format!("Failed to decompress ffmpeg archive: {e}"))?;
+
+    let dest = root.join(ffmpeg_binary_name());
+    std::fs::write(&dest, &bytes).map_err(|e| format!("Failed to write {}: {e}", dest.display()))?;
+    make_executable(&dest)?;
+
+    let _ = app.emit("media-tools:log", "ffmpeg ready.".to_string());
+    Ok(dest)
+}
+
+/// Extracts a mono, 16kHz, low-bitrate MP3 audio track from any file
+/// ffmpeg can demux (works for pure-audio inputs too, not just video).
+/// Low bitrate keeps the extracted file well under Groq's 25MB upload
+/// limit for the vast majority of sources; Task 6 (TS side) still splits
+/// further for anything unusually long.
+#[tauri::command]
+pub async fn extract_audio_track(app: AppHandle, source_path: String) -> Result<String, String> {
+    let ffmpeg = ensure_ffmpeg(&app).await?;
+
+    let temp_dir = std::env::temp_dir().join("llm-wiki-media-import");
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("Failed to create {}: {e}", temp_dir.display()))?;
+    let stem = Path::new(&source_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("audio");
+    let dest = temp_dir.join(format!("{stem}-{}.mp3", uuid::Uuid::new_v4()));
+
+    let output = tokio::process::Command::new(&ffmpeg)
+        .arg("-y")
+        .arg("-i")
+        .arg(&source_path)
+        .arg("-vn")
+        .arg("-ac")
+        .arg("1")
+        .arg("-ar")
+        .arg("16000")
+        .arg("-b:a")
+        .arg("32k")
+        .arg(&dest)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to spawn ffmpeg: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("ffmpeg failed to extract audio from {source_path}: {}", stderr.trim()));
+    }
+    if !dest.is_file() {
+        return Err(format!("ffmpeg reported success but produced no output for {source_path}"));
+    }
+    Ok(dest.to_string_lossy().to_string())
 }
 
 #[cfg(test)]
