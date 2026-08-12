@@ -42,6 +42,14 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { preprocessSourceFiles } from "@/lib/source-preprocess"
 import { moveParsedMarkdown, removeParsedMarkdown } from "@/lib/parsed-source-output"
 
+export const AUDIO_VIDEO_SOURCE_EXTENSIONS = new Set([
+  "mp4", "webm", "mov", "avi", "mkv", "mp3", "wav", "ogg", "flac", "m4a",
+])
+
+export const IMAGE_SOURCE_EXTENSIONS = new Set([
+  "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "avif", "heic",
+])
+
 export const INGESTABLE_SOURCE_EXTENSIONS = new Set([
   "md",
   "mdx",
@@ -75,6 +83,8 @@ export const INGESTABLE_SOURCE_EXTENSIONS = new Set([
   "epub",
   "mobi",
   "org",
+  ...AUDIO_VIDEO_SOURCE_EXTENSIONS,
+  ...IMAGE_SOURCE_EXTENSIONS,
 ])
 
 function flattenFiles(nodes: FileNode[]): FileNode[] {
@@ -235,7 +245,14 @@ export function isIngestableSourcePath(path: string): boolean {
   const fileName = normalized.split("/").pop() ?? ""
   if (!fileName || fileName.startsWith(".")) return false
   const ext = fileName.includes(".") ? fileName.split(".").pop()?.toLowerCase() : ""
-  return ext ? INGESTABLE_SOURCE_EXTENSIONS.has(ext) : false
+  if (!ext || !INGESTABLE_SOURCE_EXTENSIONS.has(ext)) return false
+  if (AUDIO_VIDEO_SOURCE_EXTENSIONS.has(ext)) {
+    return useWikiStore.getState().mediaIngestConfig.audioVideoEnabled
+  }
+  if (IMAGE_SOURCE_EXTENSIONS.has(ext)) {
+    return useWikiStore.getState().mediaIngestConfig.imagesEnabled
+  }
+  return true
 }
 
 export function folderContextForSourcePath(sourcePath: string, sourcesRoot = "raw/sources"): string {
