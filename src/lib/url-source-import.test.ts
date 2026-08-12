@@ -5,6 +5,7 @@ const mediaIngestConfig = vi.hoisted(() => ({ audioVideoEnabled: true }))
 vi.mock("@/commands/fs", () => ({
   writeFile: vi.fn(),
   copyFile: vi.fn(),
+  deleteFile: vi.fn(async () => undefined),
   downloadMediaUrl: vi.fn(),
 }))
 vi.mock("@/lib/source-lifecycle", () => ({
@@ -16,7 +17,7 @@ vi.mock("@/stores/wiki-store", () => ({
 }))
 vi.mock("@/lib/tauri-fetch", () => ({ getHttpFetch: vi.fn() }))
 
-import { copyFile, downloadMediaUrl, writeFile } from "@/commands/fs"
+import { copyFile, deleteFile, downloadMediaUrl, writeFile } from "@/commands/fs"
 import { enqueueSourceIngest } from "@/lib/source-lifecycle"
 import { getHttpFetch } from "@/lib/tauri-fetch"
 import {
@@ -137,7 +138,19 @@ describe("importSourceUrls media fork", () => {
     )
     expect(htmlFetch).not.toHaveBeenCalled() // no HTML/text fetch happened
     expect(writeFile).not.toHaveBeenCalled()
+    // copyFile copies, so the yt-dlp download must be removed from the temp dir.
+    expect(deleteFile).toHaveBeenCalledWith("/tmp/llm-wiki-media-import/talk [abc123].mp3")
     expect(enqueueSourceIngest).toHaveBeenCalledWith(project, ["/project/raw/sources/talk [abc123].mp3"], {})
+  })
+
+  it("deletes the temp download even when the copy into raw/sources fails", async () => {
+    vi.mocked(downloadMediaUrl).mockResolvedValue("/tmp/llm-wiki-media-import/talk [abc123].mp3")
+    vi.mocked(copyFile).mockRejectedValue(new Error("disk full"))
+
+    const results = await importSourceUrls(project, ["https://youtube.com/watch?v=abc123"], {} as never)
+
+    expect(results).toEqual([{ url: "https://youtube.com/watch?v=abc123", error: "disk full" }])
+    expect(deleteFile).toHaveBeenCalledWith("/tmp/llm-wiki-media-import/talk [abc123].mp3")
   })
 
   it("falls back to the text/HTML fetch when yt-dlp reports an unsupported URL", async () => {

@@ -1,4 +1,4 @@
-import { copyFile, downloadMediaUrl, writeFile } from "@/commands/fs"
+import { copyFile, deleteFile, downloadMediaUrl, writeFile } from "@/commands/fs"
 import type { LlmConfig, SourceWatchConfig } from "@/stores/wiki-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import type { WikiProject } from "@/types/wiki"
@@ -172,11 +172,18 @@ export async function importSourceUrls(
           // yt-dlp already wrote the audio to local disk, so this is a copy,
           // not a second HTTP round-trip.
           const downloadedPath = await downloadMediaUrl(url)
-          const destPath = await getUniqueDestPath(sourceRoot, getFileName(downloadedPath))
-          await copyFile(downloadedPath, destPath)
-          importedPaths.push(destPath)
-          results.push({ url, path: destPath })
-          continue
+          try {
+            const destPath = await getUniqueDestPath(sourceRoot, getFileName(downloadedPath))
+            await copyFile(downloadedPath, destPath)
+            importedPaths.push(destPath)
+            results.push({ url, path: destPath })
+            continue
+          } finally {
+            // The copy above leaves the yt-dlp download in the temp dir, which
+            // is never auto-cleared on Windows. Non-fatal: a failed cleanup
+            // must not mask the real error.
+            await deleteFile(downloadedPath).catch(() => {})
+          }
         } catch (mediaErr) {
           const message = mediaErr instanceof Error ? mediaErr.message : String(mediaErr)
           if (!message.toLowerCase().startsWith("unsupported url")) {
