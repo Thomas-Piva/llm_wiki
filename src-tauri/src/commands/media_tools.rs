@@ -30,28 +30,10 @@ fn ytdlp_asset_name() -> Result<(&'static str, &'static str), String> {
     }
 }
 
-async fn resolve_latest_ytdlp_tag() -> Result<String, String> {
-    let response = reqwest::Client::new()
-        .get("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")
-        .header("User-Agent", "llm-wiki")
-        .send()
-        .await
-        .map_err(|e| format!("Failed to reach GitHub releases API: {e}"))?;
-    if !response.status().is_success() {
-        return Err(format!("GitHub releases API returned HTTP {}", response.status()));
-    }
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse GitHub releases response: {e}"))?;
-    json.get("tag_name")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| "GitHub releases response had no tag_name".to_string())
-}
-
 /// Cache -> PATH -> download. Returns the absolute path to a working
-/// `yt-dlp` binary.
+/// `yt-dlp` binary. Downloads via GitHub's `releases/latest/download`
+/// redirect: no `api.github.com` call, so the unauthenticated 60/hour rate
+/// limit cannot turn a working download into a spurious failure.
 pub async fn ensure_ytdlp(app: &AppHandle) -> Result<PathBuf, String> {
     let root = install_root(app, "ytdlp-runtime")?;
     let (_, local_name) = ytdlp_asset_name()?;
@@ -64,14 +46,23 @@ pub async fn ensure_ytdlp(app: &AppHandle) -> Result<PathBuf, String> {
     }
 
     let (asset_name, local_name) = ytdlp_asset_name()?;
-    let tag = resolve_latest_ytdlp_tag().await?;
-    let url = format!("https://github.com/yt-dlp/yt-dlp/releases/download/{tag}/{asset_name}");
-    let _ = app.emit("media-tools:log", format!("Downloading yt-dlp {tag}…"));
+    let url = format!("https://github.com/yt-dlp/yt-dlp/releases/latest/download/{asset_name}");
+    let _ = app.emit("media-tools:log", "Downloading yt-dlp…".to_string());
 
     std::fs::create_dir_all(&root).map_err(|e| format!("Failed to create {}: {e}", root.display()))?;
-    let bytes = reqwest::get(&url)
+    let response = reqwest::get(&url)
         .await
-        .map_err(|e| format!("Failed to download yt-dlp from {url}: {e}"))?
+        .map_err(|e| format!("Failed to download yt-dlp from {url}: {e}"))?;
+    // Without this, a 404/503 HTML body would be chmod 0755'd and cached as
+    // the yt-dlp binary forever (the `cached.is_file()` short-circuit above
+    // never re-downloads).
+    if !response.status().is_success() {
+        return Err(format!(
+            "Failed to download yt-dlp: HTTP {} from {url}",
+            response.status()
+        ));
+    }
+    let bytes = response
         .bytes()
         .await
         .map_err(|e| format!("Failed to read yt-dlp download body: {e}"))?;
@@ -182,26 +173,6 @@ fn ffmpeg_platform_target() -> Result<&'static str, String> {
     }
 }
 
-async fn resolve_latest_ffmpeg_static_tag() -> Result<String, String> {
-    let response = reqwest::Client::new()
-        .get("https://api.github.com/repos/eugeneware/ffmpeg-static/releases/latest")
-        .header("User-Agent", "llm-wiki")
-        .send()
-        .await
-        .map_err(|e| format!("Failed to reach GitHub releases API: {e}"))?;
-    if !response.status().is_success() {
-        return Err(format!("GitHub releases API returned HTTP {}", response.status()));
-    }
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse GitHub releases response: {e}"))?;
-    json.get("tag_name")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| "GitHub releases response had no tag_name".to_string())
-}
-
 fn ffmpeg_binary_name() -> &'static str {
     if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }
 }
@@ -221,15 +192,21 @@ pub async fn ensure_ffmpeg(app: &AppHandle) -> Result<PathBuf, String> {
     }
 
     let platform = ffmpeg_platform_target()?;
-    let tag = resolve_latest_ffmpeg_static_tag().await?;
     let asset = format!("ffmpeg-{platform}.gz");
-    let url = format!("https://github.com/eugeneware/ffmpeg-static/releases/download/{tag}/{asset}");
-    let _ = app.emit("media-tools:log", format!("Downloading ffmpeg {tag}…"));
+    let url = format!("https://github.com/eugeneware/ffmpeg-static/releases/latest/download/{asset}");
+    let _ = app.emit("media-tools:log", "Downloading ffmpeg…".to_string());
 
     std::fs::create_dir_all(&root).map_err(|e| format!("Failed to create {}: {e}", root.display()))?;
-    let compressed = reqwest::get(&url)
+    let response = reqwest::get(&url)
         .await
-        .map_err(|e| format!("Failed to download ffmpeg from {url}: {e}"))?
+        .map_err(|e| format!("Failed to download ffmpeg from {url}: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Failed to download ffmpeg: HTTP {} from {url}",
+            response.status()
+        ));
+    }
+    let compressed = response
         .bytes()
         .await
         .map_err(|e| format!("Failed to read ffmpeg download body: {e}"))?;
