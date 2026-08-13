@@ -369,7 +369,11 @@ export async function importSourceFolder(
     if (isSensitiveConfigSourceFile(file.path)) {
       continue
     }
-    let allowed = isPathAllowedBySourceWatch(relPath, cfg)
+    // isPathAllowedBySourceWatch always allows media extensions (the watcher
+    // only enqueues), so the media toggles must be applied here too: this
+    // function copies, and un-ingestable media would be dead weight in
+    // raw/sources.
+    let allowed = isIngestableSourcePath(file.path) && isPathAllowedBySourceWatch(relPath, cfg)
     if (allowed) {
       try {
         allowed = await getFileSize(file.path) <= maxBytes
