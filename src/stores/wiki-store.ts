@@ -318,6 +318,23 @@ export interface MineruConfig {
   modelVersion: MineruModelVersion
 }
 
+export type MediaTranscribeBackend = "groq" | "custom"
+
+export interface MediaIngestConfig {
+  /** Audio/video files and links get transcribed via ffmpeg + a transcription API. */
+  audioVideoEnabled: boolean
+  /** "groq" uses Groq's Whisper API; "custom" uses audioVideoCustomEndpoint. */
+  audioVideoBackend: MediaTranscribeBackend
+  /** Groq API token (used when backend === "groq"). */
+  audioVideoToken: string
+  /** Base URL of an OpenAI-compatible audio transcription endpoint (used when backend === "custom"). */
+  audioVideoCustomEndpoint: string
+  /** Bearer token for the custom endpoint (used when backend === "custom"). */
+  audioVideoCustomToken: string
+  /** Standalone image files get captioned/OCR'd via the app's configured LLM — no separate provider. */
+  imagesEnabled: boolean
+}
+
 interface MultimodalConfig {
   enabled: boolean
   /** Reuse `llmConfig` for caption calls. When true, the fields
@@ -446,6 +463,7 @@ interface WikiState {
   scheduledImportConfig: ScheduledImportConfig
   sourceWatchConfig: SourceWatchConfig
   mineruConfig: MineruConfig
+  mediaIngestConfig: MediaIngestConfig
   apiConfig: ApiConfig
   generalConfig: GeneralConfig
   graphUiState: GraphUiState
@@ -477,6 +495,7 @@ interface WikiState {
   setScheduledImportConfig: (config: ScheduledImportConfig) => void
   setSourceWatchConfig: (config: SourceWatchConfig) => void
   setMineruConfig: (config: MineruConfig) => void
+  setMediaIngestConfig: (config: MediaIngestConfig) => void
   setApiConfig: (config: ApiConfig) => void
   setGeneralConfig: (config: GeneralConfig) => void
   setGraphUiState: (state: GraphUiState | ((current: GraphUiState) => GraphUiState)) => void
@@ -651,6 +670,14 @@ export const useWikiStore = create<WikiState>((set) => ({
     token: "",
     modelVersion: "vlm",
   },
+  mediaIngestConfig: {
+    audioVideoEnabled: false,
+    audioVideoBackend: "groq",
+    audioVideoToken: "",
+    audioVideoCustomEndpoint: "",
+    audioVideoCustomToken: "",
+    imagesEnabled: false,
+  },
 
   // Default `enabled: true` preserves the pre-toggle behavior: anyone
   // who already had `LLM_WIKI_API_TOKEN` set or `apiConfig.token`
@@ -693,6 +720,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   setScheduledImportConfig: (scheduledImportConfig) => set({ scheduledImportConfig }),
   setSourceWatchConfig: (sourceWatchConfig) => set({ sourceWatchConfig }),
   setMineruConfig: (mineruConfig) => set({ mineruConfig }),
+  setMediaIngestConfig: (mediaIngestConfig) => set({ mediaIngestConfig }),
   setApiConfig: (apiConfig) => set({ apiConfig }),
   setGeneralConfig: (generalConfig) => set({ generalConfig }),
   setGraphUiState: (graphUiState) =>

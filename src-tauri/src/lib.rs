@@ -673,6 +673,8 @@ pub fn run() {
             commands::remote_mcp::remote_mcp_status,
             commands::remote_mcp::remote_mcp_start,
             commands::remote_mcp::remote_mcp_stop,
+            commands::media_tools::download_media_url,
+            commands::media_tools::extract_audio_track,
             commands::vectorstore::vector_upsert,
             commands::vectorstore::vector_search,
             commands::vectorstore::vector_delete,

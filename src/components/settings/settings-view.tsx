@@ -15,6 +15,7 @@ import {
   Server,
   Settings,
   FileText,
+  Mic,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
@@ -40,6 +41,7 @@ import { NetworkSection } from "./sections/network-section"
 import { ScheduledImportSection } from "./sections/scheduled-import-section"
 import { SourceWatchSection } from "./sections/source-watch-section"
 import { MineruSection } from "./sections/mineru-section"
+import { MediaIngestSection } from "./sections/media-ingest-section"
 import { ApiServerSection } from "./sections/api-server-section"
 import { GeneralSection } from "./sections/general-section"
 import { ChangelogSection } from "./sections/changelog-section"
@@ -56,6 +58,7 @@ type CategoryId =
   | "source-watch"
   | "scheduled-import"
   | "mineru"
+  | "media-ingest"
   | "api-server"
   | "output"
   | "interface"
@@ -82,6 +85,7 @@ const CATEGORIES: Category[] = [
   { id: "source-watch", labelKey: "settings.categories.sourceWatch", icon: FolderSync },
   { id: "scheduled-import", labelKey: "settings.categories.scheduledImport", icon: Clock },
   { id: "mineru", labelKey: "settings.categories.mineru", icon: FileText },
+  { id: "media-ingest", labelKey: "settings.categories.mediaIngest", icon: Mic },
   { id: "api-server", labelKey: "settings.categories.apiServer", icon: Server },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
@@ -99,6 +103,7 @@ function initialDraft(
   scheduledImport: ReturnType<typeof useWikiStore.getState>["scheduledImportConfig"],
   sourceWatch: ReturnType<typeof useWikiStore.getState>["sourceWatchConfig"],
   mineru: ReturnType<typeof useWikiStore.getState>["mineruConfig"],
+  mediaIngest: ReturnType<typeof useWikiStore.getState>["mediaIngestConfig"],
   apiConfig: ReturnType<typeof useWikiStore.getState>["apiConfig"],
   generalConfig: ReturnType<typeof useWikiStore.getState>["generalConfig"],
   maxHistoryMessages: number,
@@ -176,6 +181,12 @@ function initialDraft(
     mineruLocalServerUrl: mineru.localServerUrl || "",
     mineruToken: mineru.token,
     mineruModelVersion: mineru.modelVersion,
+    mediaIngestAudioVideoEnabled: mediaIngest.audioVideoEnabled,
+    mediaIngestAudioVideoBackend: mediaIngest.audioVideoBackend,
+    mediaIngestAudioVideoToken: mediaIngest.audioVideoToken,
+    mediaIngestAudioVideoCustomEndpoint: mediaIngest.audioVideoCustomEndpoint,
+    mediaIngestAudioVideoCustomToken: mediaIngest.audioVideoCustomToken,
+    mediaIngestImagesEnabled: mediaIngest.imagesEnabled,
     apiEnabled: apiConfig.enabled,
     apiAllowUnauthenticated: apiConfig.allowUnauthenticated,
     apiAllowLanAccess: apiConfig.allowLanAccess,
@@ -214,6 +225,8 @@ export function SettingsView() {
   const setSourceWatchConfig = useWikiStore((s) => s.setSourceWatchConfig)
   const mineruConfig = useWikiStore((s) => s.mineruConfig)
   const setMineruConfig = useWikiStore((s) => s.setMineruConfig)
+  const mediaIngestConfig = useWikiStore((s) => s.mediaIngestConfig)
+  const setMediaIngestConfig = useWikiStore((s) => s.setMediaIngestConfig)
   const apiConfig = useWikiStore((s) => s.apiConfig)
   const setApiConfig = useWikiStore((s) => s.setApiConfig)
   const generalConfig = useWikiStore((s) => s.generalConfig)
@@ -244,6 +257,7 @@ export function SettingsView() {
       scheduledImportConfig,
       sourceWatchConfig,
       mineruConfig,
+      mediaIngestConfig,
       apiConfig,
       generalConfig,
       maxHistoryMessages,
@@ -303,6 +317,7 @@ export function SettingsView() {
         scheduledImportConfig,
         sourceWatchConfig,
         mineruConfig,
+        mediaIngestConfig,
         apiConfig,
         generalConfig,
         maxHistoryMessages,
@@ -321,6 +336,7 @@ export function SettingsView() {
     scheduledImportConfig,
     sourceWatchConfig,
     mineruConfig,
+    mediaIngestConfig,
     apiConfig,
     generalConfig,
     maxHistoryMessages,
@@ -354,6 +370,8 @@ export function SettingsView() {
       saveSourceWatchConfig,
       saveMineruConfig,
       loadMineruConfig,
+      saveMediaIngestConfig,
+      loadMediaIngestConfig,
       saveApiConfig,
       loadApiConfig,
       saveGeneralConfig,
@@ -436,6 +454,14 @@ export function SettingsView() {
       token: draft.mineruToken.trim(),
       modelVersion: draft.mineruModelVersion,
     }
+    const newMediaIngestConfig = {
+      audioVideoEnabled: draft.mediaIngestAudioVideoEnabled,
+      audioVideoBackend: draft.mediaIngestAudioVideoBackend,
+      audioVideoToken: draft.mediaIngestAudioVideoToken.trim(),
+      audioVideoCustomEndpoint: draft.mediaIngestAudioVideoCustomEndpoint.trim(),
+      audioVideoCustomToken: draft.mediaIngestAudioVideoCustomToken.trim(),
+      imagesEnabled: draft.mediaIngestImagesEnabled,
+    }
     const newApiConfig = {
       enabled: draft.apiEnabled,
       allowUnauthenticated: draft.apiAllowUnauthenticated,
@@ -468,6 +494,7 @@ export function SettingsView() {
     setScheduledImportConfig(newScheduledImport)
     setMaxHistoryMessages(draft.maxHistoryMessages)
     setMineruConfig(newMineruConfig)
+    setMediaIngestConfig(newMediaIngestConfig)
     setApiConfig(newApiConfig)
     setGeneralConfig(newGeneralConfig)
 
@@ -507,6 +534,7 @@ export function SettingsView() {
       }
 
       await saveMineruConfig(newMineruConfig)
+      await saveMediaIngestConfig(newMediaIngestConfig)
 
       // The Rust side reads `apiConfig.{enabled,token,mcpEnabled,allowLanAccess}` from this
       // same `app-state.json` via a 5s cache, so saved changes propagate within
@@ -569,6 +597,7 @@ export function SettingsView() {
           persistedSourceWatch,
           persistedScheduledImport,
           persistedMineru,
+          persistedMediaIngest,
           persistedApi,
           persistedGeneral,
           persistedZoom,
@@ -581,6 +610,7 @@ export function SettingsView() {
           loadSourceWatchConfig(project?.id),
           project ? loadScheduledImportConfig(project.path) : Promise.resolve(null),
           loadMineruConfig(),
+          loadMediaIngestConfig(),
           loadApiConfig(),
           loadGeneralConfig(),
           loadZoomLevel(),
@@ -594,6 +624,7 @@ export function SettingsView() {
         setScheduledImportConfig(resultValue(persistedScheduledImport, null) ?? scheduledImportConfig)
         setMaxHistoryMessages(maxHistoryMessages)
         setMineruConfig(resultValue(persistedMineru, null) ?? mineruConfig)
+        setMediaIngestConfig(resultValue(persistedMediaIngest, null) ?? mediaIngestConfig)
         setApiConfig(resultValue(persistedApi, null) ?? apiConfig)
         setGeneralConfig(resultValue(persistedGeneral, generalConfig))
         useZoomStore.getState().setLevel(resultValue(persistedZoom, useZoomStore.getState().level))
@@ -613,6 +644,7 @@ export function SettingsView() {
     sourceWatchConfig,
     scheduledImportConfig,
     mineruConfig,
+    mediaIngestConfig,
     apiConfig,
     generalConfig,
     maxHistoryMessages,
@@ -624,6 +656,7 @@ export function SettingsView() {
     setScheduledImportConfig,
     setSourceWatchConfig,
     setMineruConfig,
+    setMediaIngestConfig,
     setApiConfig,
     setGeneralConfig,
     setMaxHistoryMessages,
@@ -653,6 +686,8 @@ export function SettingsView() {
         return <ScheduledImportSection draft={draft} setDraft={setDraft} />
       case "mineru":
         return <MineruSection draft={draft} setDraft={setDraft} />
+      case "media-ingest":
+        return <MediaIngestSection draft={draft} setDraft={setDraft} />
       case "api-server":
         return <ApiServerSection draft={draft} setDraft={setDraft} />
       case "output":
