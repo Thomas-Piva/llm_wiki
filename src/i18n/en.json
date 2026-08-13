@@ -749,7 +749,7 @@
         "ingestConcurrencyDescription": "Prepare this many sources in parallel. Wiki writes remain ordered. Higher values use more LLM capacity and memory.",
         "noProject": "Open a project to change this project-level setting.",
         "fileTypes": "Allowed file types",
-        "fileTypesDescription": "Document types are enabled by default. Media, binaries, source code, and config-like formats stay off unless selected.",
+        "fileTypesDescription": "Document types are enabled by default. Audio/video and image files are controlled separately in Media Ingestion settings, not by the checkboxes below. Binaries, source code, and config-like formats stay off unless selected.",
         "exclusions": "Exclusions and limits",
         "maxSize": "Maximum auto-ingest file size (MB)",
         "excludeDirs": "Excluded folders",

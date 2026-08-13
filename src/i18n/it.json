@@ -749,7 +749,7 @@
         "ingestConcurrencyDescription": "Prepara questo numero di fonti in parallelo. Le scritture nel wiki restano ordinate. Valori superiori usano più capacità del modello e memoria.",
         "noProject": "Apri un progetto per modificare questa impostazione di progetto.",
         "fileTypes": "Tipi di file consentiti",
-        "fileTypesDescription": "I tipi documento sono attivi per impostazione predefinita. Media, binari, codice sorgente e formati di configurazione restano disattivi se non selezionati.",
+        "fileTypesDescription": "I tipi documento sono attivi per impostazione predefinita. Audio/video e immagini si controllano separatamente nelle impostazioni Ingest multimediale, non con le caselle qui sotto. Binari, codice sorgente e formati di configurazione restano disattivi se non selezionati.",
         "exclusions": "Esclusioni e limiti",
         "maxSize": "Dimensione massima dei file per l'elaborazione automatica (MB)",
         "excludeDirs": "Cartelle escluse",
