@@ -644,7 +644,7 @@
       },
       "multimodal": {
         "title": "Image Captioning",
-        "description": "Generate factual captions for images extracted from PDFs / DOCX / PPTX during ingest. Captions are inserted as alt text inside the source markdown — they're what semantic search matches when you search for image content. Cached by image hash so duplicate logos / charts only call the LLM once.",
+        "description": "Generate factual captions for images extracted from PDFs / DOCX / PPTX during ingest, and for standalone image files imported via Media ingestion — this master switch gates both. Captions are inserted as alt text inside the source markdown — they're what semantic search matches when you search for image content. Cached by image hash so duplicate logos / charts only call the LLM once.",
         "enableLabel": "Enable captioning at ingest",
         "enableHint": "Off: image references are stripped from ingested content — no images appear in wiki pages, search won't return them. (Files still extract to wiki/media/ for the raw-source preview.) On: each new image gets a factual caption from the vision LLM (cached by hash) and lands in the wiki page's alt text.",
         "stateOn": "ON",
@@ -1033,7 +1033,7 @@
         "customToken": "API Token (optional)",
         "customTokenHint": "Sent as an Authorization: Bearer header",
         "imagesEnabled": "Enable image captioning",
-        "imagesDescription": "Standalone image files (png/jpg/...) are captioned using the LLM model already configured under LLM Models — no separate provider needed. The configured model must support image input."
+        "imagesDescription": "Standalone image files (png/jpg/...) are captioned using the LLM model already configured under LLM Models — no separate provider needed. The configured model must support image input. Both this toggle AND the separate Image Captioning settings category must be enabled: with only this one on, image files are accepted as sources but no caption is produced."
       }
     }
   },

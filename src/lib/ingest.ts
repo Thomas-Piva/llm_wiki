@@ -788,7 +788,13 @@ async function autoIngestImpl(
           activity.updateItem(activityId, { detail: `Captioning failed: ${msg}` })
         }
       } else {
+        // Two separate toggles gate this, and only one of them lives in the
+        // Media Ingestion section — without a visible signal the user just
+        // sees an empty stub appear with no explanation.
         console.warn(`[ingest:media] "${fileName}" is an image but Image Captioning (Settings → Image Captioning, multimodalConfig.enabled) is off — skipping captioning`)
+        activity.updateItem(activityId, {
+          detail: "Captioning skipped — enable Settings → Image Captioning",
+        })
       }
     } else {
       console.warn(`[ingest:media] "${fileName}" is an image but mediaIngestConfig.imagesEnabled is false — skipping captioning`)
