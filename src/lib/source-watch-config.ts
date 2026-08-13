@@ -23,6 +23,14 @@ export const SOURCE_WATCH_FILE_TYPE_GROUPS = [
     extensions: ["html", "htm"],
   },
   {
+    id: "images",
+    extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "avif", "heic"],
+  },
+  {
+    id: "media",
+    extensions: ["mp4", "webm", "mov", "avi", "mkv", "mp3", "wav", "ogg", "flac", "m4a"],
+  },
+  {
     id: "data",
     extensions: ["json", "yaml", "yml", "xml"],
   },

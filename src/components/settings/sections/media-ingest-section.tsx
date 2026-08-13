@@ -155,14 +155,14 @@ export function MediaIngestSection({ draft, setDraft }: Props) {
           />
           <span className="text-sm font-medium">
             {t("settings.sections.mediaIngest.imagesEnabled", {
-              defaultValue: "Enable image captioning",
+              defaultValue: "Accept standalone image files as sources",
             })}
           </span>
         </label>
         <p className="text-xs text-muted-foreground pl-6">
           {t("settings.sections.mediaIngest.imagesDescription", {
             defaultValue:
-              "Standalone image files (png/jpg/...) are captioned using the LLM model already configured under LLM Models — no separate provider needed. The configured model must support image input.",
+              "Lets standalone image files (png/jpg/...) become sources at all. This alone does NOT produce captions — it also requires \"Enable captioning\" under Settings → Image Captioning (that toggle picks the LLM model, which must support image input). With only this one on, images are accepted but stay uncaptioned.",
           })}
         </p>
       </div>
