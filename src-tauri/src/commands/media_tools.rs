@@ -89,6 +89,24 @@ fn make_executable(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Mirrors `AUDIO_VIDEO_SOURCE_EXTENSIONS` in `src/lib/media-extensions.ts`.
+const DIRECT_MEDIA_URL_EXTENSIONS: &[&str] = &[
+    "mp4", "webm", "mov", "avi", "mkv", "mp3", "wav", "ogg", "flac", "m4a",
+];
+
+/// True when the URL *is* a media file rather than a page that may embed one.
+///
+/// ponytail: extension sniffing, not a HEAD request. An extension-less direct
+/// media URL (`https://cdn.example/stream?id=1`) loses generic-extractor
+/// support; probe the Content-Type here if that turns out to matter.
+fn is_direct_media_file_url(url: &str) -> bool {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    path.rsplit('/')
+        .next()
+        .and_then(|file| file.rsplit_once('.'))
+        .is_some_and(|(_, ext)| DIRECT_MEDIA_URL_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
 /// yt-dlp prints one `after_move:filepath` line per file it downloaded.
 /// Exactly one line = the single media link we asked for. More than one
 /// means the generic extractor scraped several embeds off an ordinary web
@@ -126,7 +144,8 @@ pub async fn download_media_url(app: AppHandle, url: String) -> Result<String, S
         .parent()
         .ok_or_else(|| "Could not determine ffmpeg's parent directory".to_string())?;
 
-    let output = tokio::process::Command::new(&ytdlp)
+    let mut command = tokio::process::Command::new(&ytdlp);
+    command
         .arg("--no-playlist")
         .arg("-x")
         .arg("--audio-format")
@@ -136,7 +155,17 @@ pub async fn download_media_url(app: AppHandle, url: String) -> Result<String, S
         .arg("-o")
         .arg(&output_template)
         .arg("--print")
-        .arg("after_move:filepath")
+        .arg("after_move:filepath");
+    if !is_direct_media_file_url(&url) {
+        // The generic extractor scrapes embeds off ordinary web pages, so an
+        // article with a single embedded clip would import as that clip's
+        // audio instead of the article text. Disabling it leaves only real,
+        // site-specific extractors (YouTube, Vimeo, …); everything else errors
+        // out and the caller falls back to the text-fetch path. Direct media
+        // file URLs are exempt — generic is the correct handler for those.
+        command.arg("--use-extractors").arg("default,-generic");
+    }
+    let output = command
         .arg(&url)
         .output()
         .await
@@ -144,8 +173,12 @@ pub async fn download_media_url(app: AppHandle, url: String) -> Result<String, S
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.to_lowercase().contains("unsupported url")
-            || stderr.to_lowercase().contains("is not a valid url")
+        let lower = stderr.to_lowercase();
+        // `--use-extractors default,-generic` reports a non-media page as
+        // "No suitable extractor found for URL", not "Unsupported URL".
+        if lower.contains("unsupported url")
+            || lower.contains("is not a valid url")
+            || lower.contains("no suitable extractor")
         {
             return Err(format!("unsupported URL: {}", stderr.trim()));
         }
@@ -270,7 +303,20 @@ pub async fn extract_audio_track(app: AppHandle, source_path: String) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::single_media_path;
+    use super::{is_direct_media_file_url, single_media_path};
+
+    #[test]
+    fn direct_media_files_keep_the_generic_extractor() {
+        assert!(is_direct_media_file_url("https://example.com/talk.MP3"));
+        assert!(is_direct_media_file_url("https://example.com/a/b/clip.mp4?token=1"));
+    }
+
+    #[test]
+    fn ordinary_pages_do_not() {
+        assert!(!is_direct_media_file_url("https://en.wikipedia.org/wiki/Apollo_11"));
+        assert!(!is_direct_media_file_url("https://example.com/posts/mp3-review"));
+        assert!(!is_direct_media_file_url("https://example.com/"));
+    }
 
     #[test]
     fn single_line_is_the_media_path() {
