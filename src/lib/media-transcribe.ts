@@ -75,7 +75,13 @@ async function transcribeSegment(
     throw new Error(`Transcription request failed: HTTP ${response.status}: ${text}`)
   }
   const json = (await response.json()) as { text?: string }
-  return json.text?.trim() ?? ""
+  // `""` is a legitimate result (silent segment). A *missing* field means the
+  // endpoint answered with a shape we don't understand — defaulting that to ""
+  // would silently drop a whole segment out of a joined transcript.
+  if (typeof json.text !== "string") {
+    throw new Error("Transcription response missing 'text' field")
+  }
+  return json.text.trim()
 }
 
 /**
