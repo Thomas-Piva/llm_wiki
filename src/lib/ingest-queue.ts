@@ -1094,6 +1094,26 @@ async function startTask(projectId: string, task: IngestTask): Promise<boolean> 
   return true
 }
 
+/**
+ * True when another task for the same source file is already running.
+ *
+ * `upsertQueuedIngestTask` only collapses a re-ingest onto a task that is still
+ * *pending*; once a task starts there is nothing left to reuse, so a save that
+ * lands mid-run legitimately queues a re-run. With more than one worker those
+ * re-runs would otherwise start immediately and process the same file
+ * concurrently — wasted model calls, and two runs writing the same wiki pages at
+ * once. Holding the re-run until the in-flight one finishes also restores the
+ * collapsing: further saves find it still pending and reuse it, so a burst of
+ * edits costs one re-run instead of one per save.
+ */
+function isSourcePathRunning(projectId: string, sourcePath: string): boolean {
+  return queue.some((task) =>
+    task.projectId === projectId &&
+    activeRuns.has(task.id) &&
+    sameQueuedSourcePath(task.sourcePath, sourcePath)
+  )
+}
+
 async function processNext(projectId: string): Promise<void> {
   if (scheduling || currentProjectId !== projectId) return
   if (paused) return
@@ -1105,7 +1125,8 @@ async function processNext(projectId: string): Promise<void> {
         task.projectId === projectId &&
         task.status === "pending" &&
         !activeRuns.has(task.id) &&
-        !restoredPausedTaskIds.has(task.id)
+        !restoredPausedTaskIds.has(task.id) &&
+        !isSourcePathRunning(projectId, task.sourcePath)
       )
       if (!next) break
       await startTask(projectId, next)
@@ -1130,11 +1151,17 @@ async function processNext(projectId: string): Promise<void> {
     }
   } finally {
     scheduling = false
+    // Mirrors the filter the loop above selects on. Without the same
+    // same-file guard a re-run held back for an in-flight sibling would look
+    // runnable here and reschedule immediately, spinning microtasks until that
+    // sibling finishes. A task blocked this way is woken by the completion of
+    // the run holding it (startTask calls processNext when it settles).
     const hasRunnable = queue.some((task) =>
       task.projectId === projectId &&
       task.status === "pending" &&
       !activeRuns.has(task.id) &&
-      !restoredPausedTaskIds.has(task.id)
+      !restoredPausedTaskIds.has(task.id) &&
+      !isSourcePathRunning(projectId, task.sourcePath)
     )
     const hasAnyPending = queue.some((task) =>
       task.projectId === projectId && task.status === "pending"

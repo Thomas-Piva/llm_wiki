@@ -272,6 +272,48 @@ describe("ingest-queue — concurrent workers", () => {
     expect(getQueueSummary()).toMatchObject({ completed: 3, processing: 0, pending: 0 })
   })
 
+  it("never runs two workers on the same source file, and collapses further saves", async () => {
+    // An agent editing a note through the MCP bridge saves it several times in
+    // a row. Each save enqueues the same path: the first starts, and with a
+    // free worker the re-run would start alongside it — same file ingested
+    // twice at once, both writing the same wiki pages. Later saves would then
+    // find nothing pending to reuse and pile up one task each.
+    setIngestWorkerLimit(2)
+    const runs = new Map<string, ReturnType<typeof createDeferred<string[]>>>()
+    mockAutoIngest.mockImplementation((_projectPath, sourcePath) => {
+      const deferred = createDeferred<string[]>()
+      runs.set(`${sourcePath}#${runs.size}`, deferred)
+      return deferred.promise
+    })
+
+    const note = "raw/sources/nota.md"
+    await enqueueIngest(TEST_ID, note)
+    await waitFor(() => mockAutoIngest.mock.calls.length === 1)
+
+    // Saves landing mid-run queue exactly one re-run between them.
+    await enqueueIngest(TEST_ID, note)
+    await enqueueIngest(TEST_ID, note)
+    await enqueueIngest(TEST_ID, note)
+    await flushMicrotasks()
+
+    expect(mockAutoIngest.mock.calls.length).toBe(1)
+    expect(getQueueSummary()).toMatchObject({ processing: 1, pending: 1 })
+
+    // A different file still gets the free worker — the guard is per-path.
+    await enqueueIngest(TEST_ID, "raw/sources/altra.md")
+    await waitFor(() => mockAutoIngest.mock.calls.length === 2)
+    expect(getQueueSummary().processing).toBe(2)
+
+    // Finishing the in-flight runs releases the held re-run, which then starts
+    // (and settles immediately) instead of staying stuck behind the guard.
+    mockAutoIngest.mockResolvedValue(["wiki/sources/nota.md"])
+    for (const deferred of runs.values()) {
+      if (!deferred.settled) deferred.resolve(["wiki/sources/nota.md"])
+    }
+    await waitFor(() => getQueue().length === 0)
+    expect(getQueueSummary()).toMatchObject({ processing: 0, pending: 0 })
+  })
+
   it("cancels one active worker without aborting its sibling", async () => {
     setIngestWorkerLimit(2)
     const signals = new Map<string, AbortSignal>()
