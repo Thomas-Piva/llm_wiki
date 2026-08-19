@@ -911,3 +911,64 @@ describe("reasoning controls", () => {
     expect(body.reasoning_effort).toBeUndefined()
   })
 })
+
+describe("OpenRouter reasoning control", () => {
+  const openRouter = (over: Partial<LlmConfig> = {}) => mkConfig({
+    provider: "custom",
+    apiKey: "sk-or-test",
+    model: "deepseek/deepseek-v4-flash-0731",
+    customEndpoint: "https://openrouter.ai/api/v1",
+    ...over,
+  })
+
+  it("sends effort:none so ingest's reasoning-off actually reaches the model", () => {
+    // The regression this guards: every structured ingest call passes
+    // `reasoning: { mode: "off" }`, but an OpenRouter endpoint used to fall
+    // through to the generic custom default (auto only), so the request went
+    // out with no thinking control and the model reasoned on every chunk.
+    const body = getProviderConfig(openRouter()).buildBody(
+      [{ role: "user", content: "hi" }],
+      { reasoning: { mode: "off" } },
+    ) as { reasoning?: unknown }
+
+    expect(body.reasoning).toEqual({ effort: "none" })
+  })
+
+  it("passes explicit effort levels through", () => {
+    const body = getProviderConfig(openRouter()).buildBody(
+      [{ role: "user", content: "hi" }],
+      { reasoning: { mode: "medium" } },
+    ) as { reasoning?: unknown }
+
+    expect(body.reasoning).toEqual({ effort: "medium" })
+  })
+
+  it("maps max onto the strongest effort OpenRouter documents", () => {
+    const body = getProviderConfig(openRouter()).buildBody(
+      [{ role: "user", content: "hi" }],
+      { reasoning: { mode: "max" } },
+    ) as { reasoning?: unknown }
+
+    expect(body.reasoning).toEqual({ effort: "high" })
+  })
+
+  it("leaves the model default alone on auto", () => {
+    const body = getProviderConfig(openRouter()).buildBody(
+      [{ role: "user", content: "hi" }],
+      { reasoning: { mode: "auto" } },
+    ) as { reasoning?: unknown }
+
+    expect(body.reasoning).toBeUndefined()
+  })
+
+  it("does not claim non-OpenRouter custom endpoints", () => {
+    const body = getProviderConfig(openRouter({
+      customEndpoint: "https://api.example.com/v1",
+    })).buildBody(
+      [{ role: "user", content: "hi" }],
+      { reasoning: { mode: "off" } },
+    ) as { reasoning?: unknown }
+
+    expect(body.reasoning).toBeUndefined()
+  })
+})

@@ -31,9 +31,21 @@ describe("reasoning capabilities", () => {
 
   it("limits OpenAI reasoning models to representable effort levels", () => {
     expect(resolveReasoningCapabilities(config("openai", "gpt-5.4")).modes)
-      .toEqual(["auto", "low", "medium", "high"])
+      .toEqual(["auto", "off", "low", "medium", "high"])
     expect(normalizeReasoningForProvider(config("openai", "gpt-5.4"), { mode: "max" }))
       .toEqual({ mode: "auto" })
+  })
+
+  it("withholds Off from o-series models, which reject effort none", () => {
+    // GPT-5 and later document reasoning_effort: "none"; o1/o3/o4 predate it.
+    // Offering Off there would turn every ingest call into a request error.
+    expect(resolveReasoningCapabilities(config("openai", "o3")).modes)
+      .toEqual(["auto", "low", "medium", "high"])
+    expect(normalizeReasoningForProvider(config("openai", "o3"), { mode: "off" }))
+      .toEqual({ mode: "auto" })
+    // …while a GPT-5-family model keeps the caller's Off intact.
+    expect(normalizeReasoningForProvider(config("openai", "gpt-5.4"), { mode: "off" }))
+      .toEqual({ mode: "off" })
   })
 
   it("normalizes custom budgets to positive integer values", () => {

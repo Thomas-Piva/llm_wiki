@@ -355,6 +355,10 @@ function supportsDeepSeekThinkingParam(config: LlmConfig): boolean {
   return /deepseek[-_]?v4/i.test(config.model)
 }
 
+function isOpenRouterEndpoint(config: LlmConfig): boolean {
+  return /(?:^|\/\/|\.)openrouter\.ai(?:[:/]|$)/i.test(config.customEndpoint)
+}
+
 function isKimiEndpoint(config: LlmConfig): boolean {
   return /api\.moonshot\.(ai|cn)(?:[:/]|$)/i.test(config.customEndpoint)
     || /api\.kimi\.com\/coding(?:\/|$)/i.test(config.customEndpoint)
@@ -481,6 +485,39 @@ function buildOpenAiCompatibleBody(
     return body
   }
 
+  if (isOpenRouterEndpoint(config)) {
+    // OpenRouter normalises thinking control onto its own `reasoning` object
+    // rather than the OpenAI `reasoning_effort` field, and documents
+    // `effort: "none"` as "disables reasoning entirely".
+    //
+    // Without this the endpoint fell through to the generic custom-provider
+    // default, which advertises `auto` only — so every structured ingest call's
+    // `reasoning: { mode: "off" }` was normalised away to `auto` and nothing
+    // was sent, leaving a thinking model (deepseek-v4, r1, qwen-thinking…) free
+    // to spend minutes on chain-of-thought per chunk. That is cheap in spend —
+    // reasoning tokens bill below output — and expensive in wall-clock, which
+    // is exactly how it presented: a slow ingest with a small bill.
+    //
+    // A handful of models are reasoning-mandatory and reject "none"; those
+    // reject the request outright rather than silently ignoring it, so the
+    // failure is visible instead of being paid for on every chunk.
+    // See openrouter.ai/docs/guides/best-practices/reasoning-tokens.
+    if (reasoning.mode === "off") {
+      body.reasoning = { effort: "none" }
+    } else if (
+      reasoning.mode === "low" ||
+      reasoning.mode === "medium" ||
+      reasoning.mode === "high"
+    ) {
+      body.reasoning = { effort: reasoning.mode }
+    } else if (reasoning.mode === "max") {
+      body.reasoning = { effort: "high" }
+    } else if (reasoning.mode === "custom" && typeof reasoning.budgetTokens === "number") {
+      body.reasoning = { max_tokens: reasoning.budgetTokens }
+    }
+    return body
+  }
+
   if (config.provider === "ollama") {
     // Ollama's OpenAI-compatible /v1/chat/completions maps reasoning
     // control onto `reasoning_effort` ("high"|"medium"|"low"|"none";
@@ -509,8 +546,18 @@ function buildOpenAiCompatibleBody(
     return body
   }
 
-  if (config.provider === "openai" && reasoning.mode !== "auto" && reasoning.mode !== "off") {
-    if (reasoning.mode === "low" || reasoning.mode === "medium" || reasoning.mode === "high") {
+  if (config.provider === "openai" || config.provider === "azure") {
+    // OpenAI documents `reasoning_effort: "none"` for work that gains nothing
+    // from thinking — which is what structured ingest asks for on every call.
+    // Previously "off" was excluded here alongside "auto", so the two behaved
+    // identically and the model reasoned regardless of the setting.
+    if (reasoning.mode === "off") {
+      body.reasoning_effort = "none"
+    } else if (
+      reasoning.mode === "low" ||
+      reasoning.mode === "medium" ||
+      reasoning.mode === "high"
+    ) {
       body.reasoning_effort = reasoning.mode
     }
   }

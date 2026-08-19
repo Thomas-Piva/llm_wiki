@@ -10,12 +10,21 @@ export interface ReasoningCapabilities {
 
 const AUTO_ONLY = ["auto"] as const
 const OPENAI_LEVELS = ["auto", "low", "medium", "high"] as const
+// OpenAI documents reasoning_effort none|minimal|low|medium|high|xhigh|max, with
+// "none" for "latency-critical tasks that do not benefit from any reasoning" —
+// but warns that a model may accept only a subset. The o-series predates the
+// value and rejects it, so offering Off there would fail every ingest call
+// instead of quietening one; it stays on the families documented to take it.
+const OPENAI_NONE_LEVELS = ["auto", "off", "low", "medium", "high"] as const
 const BUDGET_LEVELS = ["auto", "off", "low", "medium", "high", "max", "custom"] as const
 const THINKING_REQUIRED_BUDGETS = ["auto", "low", "medium", "high", "max", "custom"] as const
 const THINKING_REQUIRED_LEVELS = ["auto", "low", "medium", "high", "max"] as const
 const OLLAMA_LEVELS = ["auto", "off", "low", "medium", "high", "max"] as const
 const TOGGLE_LEVELS = ["auto", "off"] as const
 const DEEPSEEK_LEVELS = ["auto", "off", "high", "max"] as const
+// OpenRouter documents effort none|low|medium|high plus a max_tokens budget.
+// "max" is kept as a selectable level and sent as the strongest effort it has.
+const OPENROUTER_LEVELS = ["auto", "off", "low", "medium", "high", "max", "custom"] as const
 
 function capabilities(
   modes: readonly ReasoningMode[],
@@ -54,6 +63,12 @@ function isOpenAiReasoningModel(config: LlmConfig): boolean {
   return /^(?:gpt-5|o\d+)(?:[.\-_]|$)/.test(model)
 }
 
+/** GPT-5 and later take `reasoning_effort: "none"`; the o-series does not. */
+function supportsOpenAiEffortNone(config: LlmConfig): boolean {
+  if (config.provider === "azure" && config.azureModelFamily === "gpt5") return true
+  return /^gpt-(?:[5-9]|\d{2,})(?:[.\-_]|$)/.test(config.model.trim().toLowerCase())
+}
+
 /**
  * Resolve only capabilities that are part of the selected wire contract.
  * Generic custom gateways deliberately stay Auto-only: a vendor-looking
@@ -80,12 +95,22 @@ export function resolveReasoningCapabilities(config: LlmConfig): ReasoningCapabi
   }
   if (config.provider === "minimax") return capabilities(AUTO_ONLY)
   if (config.provider === "openai" || config.provider === "azure") {
-    return capabilities(isOpenAiReasoningModel(config) ? OPENAI_LEVELS : AUTO_ONLY)
+    if (!isOpenAiReasoningModel(config)) return capabilities(AUTO_ONLY)
+    return capabilities(supportsOpenAiEffortNone(config) ? OPENAI_NONE_LEVELS : OPENAI_LEVELS)
   }
   if (config.provider === "custom") {
     const endpoint = config.customEndpoint.toLowerCase()
     if (/api\.deepseek\.(?:com|cn)(?:[:/]|$)/.test(endpoint)) {
       return capabilities(DEEPSEEK_LEVELS)
+    }
+    // OpenRouter exposes one thinking control across every model it fronts
+    // (`reasoning.effort`, plus a token budget), so the levels are the
+    // endpoint's, not the model's. Declaring them here is what lets a caller's
+    // `off` survive normalize() — under the generic custom default it was
+    // rewritten to `auto`, and the request went out with no thinking control at
+    // all. It also puts the selector in Settings for a model reached this way.
+    if (/(?:^|\/\/|\.)openrouter\.ai(?:[:/]|$)/.test(endpoint)) {
+      return capabilities(OPENROUTER_LEVELS)
     }
     if (/xiaomimimo\.com(?:[:/]|$)/.test(endpoint)) {
       return capabilities(TOGGLE_LEVELS)
