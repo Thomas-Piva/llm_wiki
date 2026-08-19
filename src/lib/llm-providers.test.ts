@@ -921,7 +921,7 @@ describe("OpenRouter reasoning control", () => {
     ...over,
   })
 
-  it("sends effort:none so ingest's reasoning-off actually reaches the model", () => {
+  it("disables thinking with enabled:false so ingest's request reaches the model", () => {
     // The regression this guards: every structured ingest call passes
     // `reasoning: { mode: "off" }`, but an OpenRouter endpoint used to fall
     // through to the generic custom default (auto only), so the request went
@@ -931,7 +931,9 @@ describe("OpenRouter reasoning control", () => {
       { reasoning: { mode: "off" } },
     ) as { reasoning?: unknown }
 
-    expect(body.reasoning).toEqual({ effort: "none" })
+    // Not `effort: "none"`: supported efforts are per-model (deepseek-v4-flash
+    // lists only max/high/low), while `enabled` works across the catalog.
+    expect(body.reasoning).toEqual({ enabled: false })
   })
 
   it("passes explicit effort levels through", () => {

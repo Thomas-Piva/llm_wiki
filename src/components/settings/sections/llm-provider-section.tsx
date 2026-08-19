@@ -15,6 +15,7 @@ import { testLlmConnection, testLlmFunction, type ProviderTestResult } from "@/l
 import { projectLlmProfile, resolveProjectLlmConfig } from "@/lib/llm-task-routing"
 import { saveProjectLlmOverride } from "@/lib/project-store"
 import { normalizeReasoningForProvider, resolveReasoningCapabilities } from "@/lib/reasoning-capabilities"
+import { fetchOpenRouterModels, type OpenRouterModel } from "@/lib/openrouter-models"
 
 const HTTP_HEADER_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
 
@@ -386,6 +387,22 @@ function PresetRow({
   const streamingEnabled = ov.streamingEnabled !== false
   const [headersText, setHeadersText] = useState(() => llmHeadersToText(ov.customHeaders))
   const isLocalCliProvider = preset.provider === "claude-code" || preset.provider === "codex-cli"
+
+  // OpenRouter publishes its catalog, so the model list is asked for rather
+  // than pinned. Only while the row is open: closed rows would fire one request
+  // each on mount for a list nobody is looking at. The fetch caches and
+  // swallows failures, leaving the static chips as the fallback.
+  const servesCatalog = /(?:^|\/\/|\.)openrouter\.ai(?:[:/]|$)/i.test(baseUrl)
+  const [catalog, setCatalog] = useState<OpenRouterModel[]>([])
+  useEffect(() => {
+    if (!servesCatalog || !isExpanded) return
+    const abort = new AbortController()
+    let cancelled = false
+    fetchOpenRouterModels(abort.signal)
+      .then((models) => { if (!cancelled) setCatalog(models) })
+      .catch(() => { /* picker falls back to the preset's chips */ })
+    return () => { cancelled = true; abort.abort() }
+  }, [servesCatalog, isExpanded])
   const [testState, setTestState] = useState<ProviderTestState>({ kind: "idle" })
   const hasConfig = !!apiKey || !!ov.baseUrl || !!ov.model || !!ov.azureApiVersion || !!ov.azureModelFamily
     || Object.keys(ov.customHeaders ?? {}).length > 0 || ov.streamingEnabled === false
@@ -679,6 +696,7 @@ function PresetRow({
               suggestions={preset.suggestedModels ?? []}
               placeholder={preset.defaultModel ?? "e.g. gpt-4o"}
               onChange={(v) => onChange({ model: v })}
+              catalog={catalog}
             />
           </div>
 
@@ -980,6 +998,103 @@ interface ModelPickerProps {
   suggestions: string[]
   placeholder: string
   onChange: (value: string) => void
+  /** Live catalog, when the gateway publishes one. Empty = chips only. */
+  catalog?: OpenRouterModel[]
+}
+
+/**
+ * Searchable dropdown over a gateway's live catalog.
+ *
+ * A hand-maintained chip row cannot represent 400+ rotating models, and a bare
+ * text field means knowing an exact id by heart. This lists what the gateway
+ * serves right now, filtered as you type. Selecting fills the same field the
+ * chips write to, so typing an unlisted id keeps working.
+ *
+ * Each row carries what actually decides whether a model suits ingest: context
+ * window, and whether it thinks — `mandatory` thinking cannot be turned off, so
+ * that model will be slow here whatever the reasoning setting says.
+ */
+function CatalogPicker({ catalog, value, onChange }: {
+  catalog: OpenRouterModel[]
+  value: string
+  onChange: (value: string) => void
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState("")
+
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const rows = q
+      ? catalog.filter((m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
+      : catalog
+    return rows.slice(0, 60)
+  }, [catalog, query])
+
+  if (catalog.length === 0) return null
+
+  return (
+    <div className="space-y-1.5">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full justify-between font-normal"
+      >
+        <span className="truncate">
+          {t("settings.sections.llm.browseCatalog", {
+            defaultValue: "Browse {{count}} models",
+            count: catalog.length,
+          })}
+        </span>
+        {open ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+      </Button>
+
+      {open && (
+        <div className="rounded-md border">
+          <Input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t("settings.sections.llm.searchModels", { defaultValue: "Search models…" })}
+            className="rounded-b-none border-0 border-b"
+          />
+          <div className="max-h-64 overflow-y-auto">
+            {matches.length === 0 && (
+              <p className="px-3 py-4 text-center text-xs text-muted-foreground">
+                {t("settings.sections.llm.noModelMatch", { defaultValue: "No model matches." })}
+              </p>
+            )}
+            {matches.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => {
+                  onChange(m.id)
+                  setOpen(false)
+                  setQuery("")
+                }}
+                className={`flex w-full flex-col gap-0.5 border-b px-3 py-2 text-left last:border-b-0 hover:bg-accent hover:text-accent-foreground ${
+                  m.id === value ? "bg-primary/10" : ""
+                }`}
+              >
+                <span className="font-mono text-xs">{m.id}</span>
+                <span className="text-[11px] text-muted-foreground">
+                  {m.contextLength ? `${Math.round(m.contextLength / 1000)}k ctx` : "—"}
+                  {m.reasoning?.mandatory
+                    ? ` · ${t("settings.sections.llm.thinkingAlwaysOn", { defaultValue: "thinking always on" })}`
+                    : m.reasoning?.defaultEnabled
+                      ? ` · ${t("settings.sections.llm.thinkingOnByDefault", { defaultValue: "thinking on by default" })}`
+                      : ""}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 /**
@@ -992,13 +1107,16 @@ interface ModelPickerProps {
  * model is active without reading the text field. Presets with no
  * `suggestedModels` render the input alone.
  */
-function ModelPicker({ value, suggestions, placeholder, onChange }: ModelPickerProps) {
+function ModelPicker({ value, suggestions, placeholder, onChange, catalog }: ModelPickerProps) {
   const { t } = useTranslation()
   const hasSuggestions = suggestions.length > 0
   const isCustom = hasSuggestions && value.length > 0 && !suggestions.includes(value)
 
   return (
     <div className="space-y-2">
+      {catalog && catalog.length > 0 && (
+        <CatalogPicker catalog={catalog} value={value} onChange={onChange} />
+      )}
       {hasSuggestions && (
         <div className="flex flex-wrap gap-1.5">
           {suggestions.map((m) => {

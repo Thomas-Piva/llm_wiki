@@ -503,7 +503,13 @@ function buildOpenAiCompatibleBody(
     // failure is visible instead of being paid for on every chunk.
     // See openrouter.ai/docs/guides/best-practices/reasoning-tokens.
     if (reasoning.mode === "off") {
-      body.reasoning = { effort: "none" }
+      // `enabled: false` rather than `effort: "none"`: the effort value is
+      // per-model, and models advertise which they take. deepseek-v4-flash, for
+      // one, lists only max/high/low — sending "none" there leans on a value it
+      // never claimed to accept. `enabled` is the model-independent switch, so
+      // it turns thinking off across the catalog rather than on the subset that
+      // happens to enumerate "none".
+      body.reasoning = { enabled: false }
     } else if (
       reasoning.mode === "low" ||
       reasoning.mode === "medium" ||

@@ -185,6 +185,35 @@ export const LLM_PRESETS: LlmPreset[] = [
     suggestedContextSize: 64000,
   },
   {
+    id: "openrouter",
+    label: "OpenRouter",
+    hint: "openrouter.ai",
+    provider: "custom",
+    baseUrl: "https://openrouter.ai/api/v1",
+    defaultModel: "deepseek/deepseek-v4-flash-0731",
+    apiMode: "chat_completions",
+    // Aggregator fronting most vendors behind one OpenAI-compatible endpoint,
+    // so it reuses the generic chat-completions wire. Thinking is controlled
+    // through OpenRouter's own `reasoning` object rather than the model's
+    // native field — see buildOpenAiCompatibleBody, which needs this exact
+    // base URL to recognise the endpoint and honour a reasoning-off request.
+    // Model ids are `vendor/model`; the catalog is large and rotates, so this
+    // is a practical subset and any other id can be typed in.
+    suggestedModels: [
+      "deepseek/deepseek-v4-flash-0731",
+      "deepseek/deepseek-v4-pro",
+      "anthropic/claude-sonnet-4.6",
+      "openai/gpt-5.5",
+      "google/gemini-3.5-flash",
+      "moonshotai/kimi-k2.6",
+      "qwen/qwen3-next-80b-a3b-instruct",
+      "z-ai/glm-5",
+      "x-ai/grok-4",
+      "meta-llama/llama-4-maverick",
+    ],
+    suggestedContextSize: 128000,
+  },
+  {
     id: "atlascloud",
     label: "Atlas Cloud",
     hint: "api.atlascloud.ai",
