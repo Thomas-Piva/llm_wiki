@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest"
-import { normalizeSourceWatchConfig } from "./source-watch-config"
+import { backfillMediaExtensions, normalizeSourceWatchConfig } from "./source-watch-config"
 import { AUDIO_VIDEO_SOURCE_EXTENSIONS, IMAGE_SOURCE_EXTENSIONS } from "./media-extensions"
 
-describe("normalizeSourceWatchConfig media-extension backfill", () => {
+describe("media-extension backfill (one-time, at the storage boundary)", () => {
   it("adds the media extensions to an old persisted config that predates this feature", () => {
     const oldPersistedConfig = {
       includeExtensions: ["md", "pdf", "docx"], // realistic pre-feature saved list
     }
-    const result = normalizeSourceWatchConfig(oldPersistedConfig)
+    const result = normalizeSourceWatchConfig(backfillMediaExtensions(oldPersistedConfig))
     for (const ext of AUDIO_VIDEO_SOURCE_EXTENSIONS) {
       expect(result.includeExtensions).toContain(ext)
     }
@@ -18,6 +18,7 @@ describe("normalizeSourceWatchConfig media-extension backfill", () => {
     expect(result.includeExtensions).toContain("md")
     expect(result.includeExtensions).toContain("pdf")
     expect(result.includeExtensions).toContain("docx")
+    expect(result.mediaExtensionsMerged).toBe(true)
   })
 
   it("does not duplicate media extensions for a fresh config that already has them", () => {
@@ -30,7 +31,32 @@ describe("normalizeSourceWatchConfig media-extension backfill", () => {
     // `importSourceFiles` clears includeExtensions to bypass the watcher
     // allow-list for explicit imports; backfilling media there would turn that
     // allow-all into a media-only filter and reject every document.
-    const result = normalizeSourceWatchConfig({ includeExtensions: [] })
+    const result = normalizeSourceWatchConfig(backfillMediaExtensions({ includeExtensions: [] }))
     expect(result.includeExtensions).toEqual([])
+  })
+
+  it("lets the user untick mp4 and mp3 and keeps them off", () => {
+    // The bug this guards: the union used to run inside normalize, so the
+    // settings UI re-added mp4/mp3 in the same tick it removed them and the
+    // checkbox bounced straight back to ticked.
+    const afterUnticking = {
+      includeExtensions: ["md", "pdf", "png"], // mp4 and mp3 removed by the user
+      mediaExtensionsMerged: true,
+    }
+    const result = normalizeSourceWatchConfig(afterUnticking)
+    expect(result.includeExtensions).not.toContain("mp4")
+    expect(result.includeExtensions).not.toContain("mp3")
+    expect(result.includeExtensions).toContain("png")
+  })
+
+  it("does not resurrect turned-off media when the config is re-read from disk", () => {
+    const saved = {
+      includeExtensions: ["md", "pdf"], // every media extension turned off
+      mediaExtensionsMerged: true,
+    }
+    const result = normalizeSourceWatchConfig(backfillMediaExtensions(saved))
+    for (const ext of [...AUDIO_VIDEO_SOURCE_EXTENSIONS, ...IMAGE_SOURCE_EXTENSIONS]) {
+      expect(result.includeExtensions).not.toContain(ext)
+    }
   })
 })

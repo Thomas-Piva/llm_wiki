@@ -219,11 +219,14 @@ describe("source-lifecycle path helpers", () => {
         persistExtractedMarkdown: false,
         parsingConcurrency: 2,
         ingestConcurrency: 1,
-        includeExtensions: ["md"],
+        // Media are ticked here, as they are in the shipped defaults and in any
+        // pre-media config once backfillMediaExtensions has migrated it.
+        includeExtensions: ["md", "png", "mp4"],
         excludeExtensions: [],
         excludeDirs: [],
         excludeGlobs: [],
         maxFileSizeMb: 100,
+        mediaExtensionsMerged: true,
       },
     )
 
@@ -231,6 +234,58 @@ describe("source-lifecycle path helpers", () => {
       "/project/raw/sources/imported/photo.png",
       "/project/raw/sources/imported/talk.mp4",
     ])
+  })
+
+  it("skips media the user unticked, even with the multimodal toggles on", async () => {
+    // The two gates are independent: the multimodal toggles say the app *can*
+    // read media, the extension list says whether this user wants it. Unticking
+    // mp4 used to be impossible — normalize re-added it — so this asserts the
+    // untick is now honoured all the way down to which files get copied.
+    useWikiStore.getState().setMediaIngestConfig({
+      audioVideoEnabled: true,
+      audioVideoBackend: "groq",
+      audioVideoToken: "",
+      audioVideoCustomEndpoint: "",
+      audioVideoCustomToken: "",
+      imagesEnabled: true,
+    })
+    mocks.listDirectory.mockResolvedValue([
+      { name: "photo.png", path: "/external/imported/photo.png", is_dir: false },
+      { name: "talk.mp4", path: "/external/imported/talk.mp4", is_dir: false },
+      { name: "notes.md", path: "/external/imported/notes.md", is_dir: false },
+    ])
+
+    const copied = await importSourceFolder(
+      { id: "p1", name: "Project", path: "/project" },
+      "/external/imported",
+      {
+        provider: "openai",
+        endpoint: "https://api.example.com/v1",
+        apiKey: "key",
+        model: "model",
+        customModel: "",
+        reasoning: { enabled: false, effort: "low" },
+      } as never,
+      {
+        enabled: true,
+        autoIngest: true,
+        persistExtractedMarkdown: false,
+        parsingConcurrency: 2,
+        ingestConcurrency: 1,
+        includeExtensions: ["md", "png"], // mp4 unticked by the user
+        excludeExtensions: [],
+        excludeDirs: [],
+        excludeGlobs: [],
+        maxFileSizeMb: 100,
+        mediaExtensionsMerged: true,
+      },
+    )
+
+    expect(copied).toEqual([
+      "/project/raw/sources/imported/notes.md",
+      "/project/raw/sources/imported/photo.png",
+    ])
+    expect(mocks.copyFile).not.toHaveBeenCalledWith("/external/imported/talk.mp4", expect.anything())
   })
 
   it("does not import config-like files from hidden tool folders", async () => {

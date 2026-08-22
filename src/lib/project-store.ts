@@ -1,7 +1,7 @@
 import { load } from "@tauri-apps/plugin-store"
 import type { WikiProject } from "@/types/wiki"
 import type { ApiConfig, CustomLlmPreset, GeneralConfig, LlmConfig, SearchApiConfig, EmbeddingConfig, MediaIngestConfig, MineruConfig, MultimodalConfig, OutputLanguage, ProjectLlmOverride, ProviderConfigs, ProxyConfig, ScheduledImportConfig, SourceWatchConfig, TaskModelRoutingConfig } from "@/stores/wiki-store"
-import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
+import { backfillMediaExtensions, normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { normalizePath } from "@/lib/path-utils"
 import { DEFAULT_ZOOM_LEVEL, clampZoomLevel } from "@/stores/zoom-store"
 
@@ -492,8 +492,9 @@ export async function loadSourceWatchConfig(projectId?: string): Promise<SourceW
   const store = await getStore()
   const settings = await store.get<Record<string, SourceWatchConfig>>(SOURCE_WATCH_CONFIG_KEY)
   const config = projectId ? settings?.[projectId] : undefined
-  if (config) return normalizeSourceWatchConfig(config)
-  if (settings?.default) return normalizeSourceWatchConfig(settings.default)
+  // backfill at the storage boundary, once: see backfillMediaExtensions.
+  if (config) return normalizeSourceWatchConfig(backfillMediaExtensions(config))
+  if (settings?.default) return normalizeSourceWatchConfig(backfillMediaExtensions(settings.default))
 
   const legacyEnabled = await loadProjectFileSyncEnabled(projectId)
   return normalizeSourceWatchConfig({ enabled: legacyEnabled })

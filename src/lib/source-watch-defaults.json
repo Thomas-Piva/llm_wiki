@@ -86,5 +86,6 @@
     "draft-*",
     "*.private.*"
   ],
-  "maxFileSizeMb": 100
+  "maxFileSizeMb": 100,
+  "mediaExtensionsMerged": true
 }

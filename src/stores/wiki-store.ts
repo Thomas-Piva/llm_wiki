@@ -36,6 +36,15 @@ interface LlmConfig {
   apiMode?: CustomApiMode
   reasoning?: ReasoningConfig
   /**
+   * Reasoning for ingest's structured calls (analysis, page generation,
+   * captioning, dedup), kept separate from `reasoning` because the two want
+   * opposite things: chat benefits from thinking, whereas ingest asks for
+   * structured output thousands of times and a model that spends its budget on
+   * chain-of-thought can end the stream with empty `content` — a lost page.
+   * Defaults to "off", which is what ingest hardcoded before this was settable.
+   */
+  ingestReasoning?: ReasoningConfig
+  /**
    * Local CLI providers only. When true, LLM Wiki asks Claude/Codex CLI
    * to ignore user-level rules/config/MCP/tool state where the CLI exposes
    * such controls. Default false preserves existing advanced-user setups.
@@ -286,6 +295,13 @@ interface SourceWatchConfig {
   excludeDirs: string[]
   excludeGlobs: string[]
   maxFileSizeMb: number
+  /**
+   * Marks that the one-time media-extension backfill already ran for this
+   * config, so it is not re-applied and cannot undo extensions the user turned
+   * off. Optional because it is absent, by definition, on the pre-media configs
+   * the backfill exists to upgrade.
+   */
+  mediaExtensionsMerged?: boolean
 }
 
 export type MineruModelVersion = "pipeline" | "vlm"
@@ -366,6 +382,8 @@ export interface ProviderOverride {
   apiMode?: CustomApiMode
   maxContextSize?: number
   reasoning?: ReasoningConfig
+  /** Reasoning for ingest's structured calls. See LlmConfig.ingestReasoning. */
+  ingestReasoning?: ReasoningConfig
   localCliIsolation?: boolean
   codexCliTimeoutMinutes?: number
   requestTimeoutMinutes?: number

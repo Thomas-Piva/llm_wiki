@@ -315,6 +315,7 @@ function resolveCaptionConfig(
 import { buildLanguageDirective } from "@/lib/output-language"
 import { detectLanguage } from "@/lib/detect-language"
 import { sameScriptFamily } from "@/lib/language-metadata"
+import { resolveIngestReasoning } from "@/lib/reasoning-capabilities"
 import {
   loadProjectWikiSchemaRouting,
   validateWikiPageRouting,
@@ -1104,7 +1105,7 @@ async function autoIngestImpl(
         },
       },
       signal,
-      { temperature: 0.1, reasoning: { mode: "off" }, max_tokens: 4096 },
+      { temperature: 0.1, reasoning: resolveIngestReasoning(llmConfig), max_tokens: 4096 },
     )
   }
 
@@ -1161,7 +1162,7 @@ async function autoIngestImpl(
     signal,
     {
       temperature: 0.1,
-      reasoning: { mode: "off" },
+      reasoning: resolveIngestReasoning(llmConfig),
       max_tokens: computeIngestGenerationMaxTokens(llmConfig.maxContextSize),
     },
   )
@@ -1207,7 +1208,7 @@ async function autoIngestImpl(
         signal,
         {
           temperature: 0.1,
-          reasoning: { mode: "off" },
+          reasoning: resolveIngestReasoning(llmConfig),
           max_tokens: computeIngestReviewMaxTokens(llmConfig.maxContextSize),
         },
       )
@@ -1284,7 +1285,7 @@ async function autoIngestImpl(
         signal,
         {
           temperature: 0.1,
-          reasoning: { mode: "off" },
+          reasoning: resolveIngestReasoning(llmConfig),
           // A repair must regenerate the complete FILE body. Reusing the
           // smaller review budget can immediately truncate the same long page
           // that exhausted the original response.
@@ -2896,7 +2897,7 @@ async function runChunkStream(
       onError: (err) => { hadError = err },
     },
     signal,
-    { temperature: 0.1, reasoning: { mode: "off" }, max_tokens: 4096 },
+    { temperature: 0.1, reasoning: resolveIngestReasoning(llmConfig), max_tokens: 4096 },
   )
   if (hadError) throw hadError
   return raw

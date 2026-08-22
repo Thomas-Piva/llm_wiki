@@ -131,6 +131,24 @@ export function normalizeReasoningForProvider(
   return resolveReasoningCapabilities(config).normalize(requested)
 }
 
+/**
+ * Reasoning for ingest's structured calls. Ingest used to hardcode
+ * `{ mode: "off" }` at every call site, which is the right default — thinking
+ * buys little on structured extraction and a model that spends its budget on
+ * chain-of-thought can return empty `content`, losing the page — but it is
+ * wrong as a *rule*: some models (OpenRouter's ox-alpha, for one) reject
+ * disabling reasoning outright with a 400 and every ingest call fails. Making
+ * it settable is what lets any provider be used; "off" stays the default so
+ * existing setups behave exactly as before.
+ */
+export function resolveIngestReasoning(config: LlmConfig): ReasoningConfig {
+  // Deliberately NOT normalized here: the provider layer already normalizes
+  // when it builds the payload. Normalizing twice turned "off" into "auto" for
+  // providers whose capability list is auto-only, quietly re-enabling the
+  // thinking that ingest disables on purpose.
+  return config.ingestReasoning ?? { mode: "off" }
+}
+
 export function isAdaptiveAnthropicModel(config: LlmConfig): boolean {
   return config.provider === "anthropic" && isClaude46OrLater(config.model)
 }

@@ -56,6 +56,11 @@ function normalizeList(values: readonly string[] | undefined): string[] {
  * media before `isIngestableSourcePath` (the real toggle gate) runs. An empty
  * include-list means "no extension filter" (see `importSourceFiles`), so it is
  * left empty — unioning there would turn an allow-all into a media-only list.
+ *
+ * This runs ONCE, when a pre-media config is read from disk — never on every
+ * normalize. Unioning on each normalize re-added the media extensions in the
+ * same tick the settings UI removed them, so unticking mp4/mp3 (or any image)
+ * silently bounced back to ticked and there was no way to stop ingesting them.
  */
 function withMediaExtensions(includeExtensions: readonly string[]): string[] {
   if (includeExtensions.length === 0) return []
@@ -64,6 +69,20 @@ function withMediaExtensions(includeExtensions: readonly string[]): string[] {
     ...AUDIO_VIDEO_SOURCE_EXTENSIONS,
     ...IMAGE_SOURCE_EXTENSIONS,
   ])
+}
+
+/**
+ * One-time upgrade of a config persisted before media ingest existed. Apply at
+ * the storage boundary only (see `loadSourceWatchConfig`); afterwards the
+ * user's list is authoritative, including the extensions they turned off.
+ */
+export function backfillMediaExtensions(config: Partial<SourceWatchConfig>): Partial<SourceWatchConfig> {
+  if (config.mediaExtensionsMerged) return config
+  return {
+    ...config,
+    includeExtensions: withMediaExtensions(normalizeExtensions(config.includeExtensions)),
+    mediaExtensionsMerged: true,
+  }
 }
 
 export function normalizeSourceWatchConfig(config?: Partial<SourceWatchConfig> | null): SourceWatchConfig {
@@ -84,9 +103,11 @@ export function normalizeSourceWatchConfig(config?: Partial<SourceWatchConfig> |
       config?.persistExtractedMarkdown ?? DEFAULT_SOURCE_WATCH_CONFIG.persistExtractedMarkdown,
     parsingConcurrency,
     ingestConcurrency,
-    includeExtensions: withMediaExtensions(
-      normalizeExtensions(config?.includeExtensions ?? DEFAULT_SOURCE_WATCH_CONFIG.includeExtensions),
+    // No media union here: whatever the user left ticked is what gets watched.
+    includeExtensions: normalizeExtensions(
+      config?.includeExtensions ?? DEFAULT_SOURCE_WATCH_CONFIG.includeExtensions,
     ),
+    mediaExtensionsMerged: config?.mediaExtensionsMerged ?? DEFAULT_SOURCE_WATCH_CONFIG.mediaExtensionsMerged,
     excludeExtensions: normalizeExtensions(config?.excludeExtensions ?? DEFAULT_SOURCE_WATCH_CONFIG.excludeExtensions),
     excludeDirs: normalizeList(config?.excludeDirs ?? DEFAULT_SOURCE_WATCH_CONFIG.excludeDirs),
     excludeGlobs: normalizeList(config?.excludeGlobs ?? DEFAULT_SOURCE_WATCH_CONFIG.excludeGlobs),
