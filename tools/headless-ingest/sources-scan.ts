@@ -14,6 +14,22 @@ import { type IngestTask, readQueue, writeQueue } from "./queue-store"
 
 const SOURCES_REL = "raw/sources"
 
+/**
+ * Vault-relative paths of files already ingested (file-snapshot keys ARE the
+ * sourcePath). Used to skip re-queuing work that's done — critical on a vault
+ * migrated from the GUI, whose queue tasks carry `ingest-<ts>` ids that would
+ * never match our `src:<relpath>` ids, so id-only dedup would re-enqueue
+ * everything. Deduping by path + snapshot makes a full re-scan idempotent.
+ */
+async function ingestedPaths(project: string): Promise<Set<string>> {
+  try {
+    const raw = await fs.readFile(join(project, ".llm-wiki", "file-snapshot.json"), "utf8")
+    return new Set(Object.keys(JSON.parse(raw)?.files ?? {}))
+  } catch {
+    return new Set()
+  }
+}
+
 /** "raw/sources/AI/papers/x.pdf" → "AI > papers" (matches the GUI's folderContext). */
 function folderContextFor(relFromSources: string): string {
   const dir = dirname(relFromSources)
@@ -46,14 +62,17 @@ export async function enqueueSources(project: string): Promise<number> {
   await walkFiles(sourcesRoot, files)
 
   const existing = await readQueue(project)
-  const knownIds = new Set(existing.map((t) => t.id))
+  const knownPaths = new Set(existing.map((t) => t.sourcePath))
+  const ingested = await ingestedPaths(project)
   const now = Date.now()
 
   const additions: IngestTask[] = []
   for (const abs of files) {
     const sourcePath = join(SOURCES_REL, relative(sourcesRoot, abs))
+    // Dedup by PATH (not id) + skip already-ingested, so a migrated vault's
+    // `ingest-<ts>` tasks and done files don't get re-queued as `src:` dupes.
+    if (knownPaths.has(sourcePath) || ingested.has(sourcePath)) continue
     const id = `src:${sourcePath}`
-    if (knownIds.has(id)) continue
     additions.push({
       id,
       projectId: "headless",
