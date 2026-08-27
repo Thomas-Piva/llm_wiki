@@ -23,6 +23,7 @@ import {
   vectorCountChunks,
   vectorClearChunks,
 } from "./vector-store"
+import { toMarkdown } from "@firecrawl/anydoc"
 
 const CLAUDE_BIN = process.env.AGENT_CLAUDE_BIN ?? "/home/claude/.local/bin/claude"
 const CODEX_BIN = process.env.AGENT_CODEX_BIN ?? "/opt/node25/bin/codex"
@@ -94,6 +95,16 @@ const MIME_BY_EXT: Record<string, string> = {
   ".svg": "image/svg+xml",
 }
 
+// Office/document formats anydoc converts to Markdown locally (pure Rust, no ML,
+// no network, ~5ms). Mirrors the native Rust `preprocess_file`
+// (docx-rs/calamine/office_oxide) that this headless shim used to stub out, so
+// `.docx/.pptx/.xlsx/...` yield real text instead of raw OOXML. PDF is excluded
+// on purpose — it stays on MinerU (OCR + image extraction anydoc's text path skips).
+const OFFICE_EXTS = new Set([
+  "docx", "doc", "docm", "pptx", "ppt", "pps", "pptm", "ppsx", "ppsm", "pot",
+  "xlsx", "xls", "xlsm", "xlsb", "ods", "odt", "odp", "rtf", "epub", "csv",
+])
+
 async function listDir(
   path: string,
   includeHidden: boolean,
@@ -134,7 +145,20 @@ export async function invoke<T = unknown>(cmd: string, args: any = {}): Promise<
       try {
         const [cs, os] = await Promise.all([fs.stat(cache), fs.stat(src)])
         if (cs.mtimeMs >= os.mtimeMs) return (await fs.readFile(cache, "utf8")) as T
-      } catch { /* no fresh cache — read the file itself */ }
+      } catch { /* no fresh cache — extract or read below */ }
+      // Office/document formats → anydoc → Markdown, cached like MinerU's PDF
+      // output so re-reads are free. Falls through to raw read if anydoc fails.
+      const ext = extname(src).toLowerCase().replace(/^\./, "")
+      if (OFFICE_EXTS.has(ext)) {
+        try {
+          const md = await toMarkdown(src)
+          await fs.mkdir(dirname(cache), { recursive: true })
+          await fs.writeFile(cache, md, "utf8")
+          return md as T
+        } catch (e) {
+          console.warn(`[anydoc] ${basename(src)} failed, reading raw: ${String(e).slice(0, 140)}`)
+        }
+      }
       return (await fs.readFile(src, "utf8")) as T
     }
 
