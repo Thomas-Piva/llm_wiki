@@ -1,0 +1,22 @@
+[Unit]
+Description=llm_wiki light vault backend — keyword search + read from disk, no GUI
+Documentation=file:%h/llm_wiki_fork/tools/headless-ingest
+After=network.target
+
+[Service]
+Type=simple
+# VAULT must be an absolute path (specifier %h is expanded here by systemd).
+# For a bearer token, add: Environment=LIGHT_BACKEND_TOKEN=... (or an EnvironmentFile).
+Environment=VAULT=%h/headless-vps
+Environment=PORT=19829
+WorkingDirectory=%h/llm_wiki_fork
+ExecStart=%h/.local/bin/bun tools/headless-ingest/light-backend.ts
+Restart=on-failure
+RestartSec=3
+
+# Light by design: ripgrep bursts, otherwise idle. Keep a modest ceiling.
+MemoryMax=256M
+Nice=5
+
+[Install]
+WantedBy=default.target

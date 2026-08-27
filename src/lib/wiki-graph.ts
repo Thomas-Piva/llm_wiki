@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core"
 import { readFile, listDirectory } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
 import { buildRetrievalGraph, calculateRelevance } from "./graph-relevance"
@@ -35,6 +36,11 @@ export interface WikiGraphResult {
 
 const GRAPH_FILE_READ_CONCURRENCY = 16
 const MAX_WEIGHTED_GRAPH_NODES = 3_000
+// Hard render cap: a force-directed graph with tens of thousands of nodes
+// (e.g. a very large vault) never finishes laying out in the browser. Above
+// this size we keep only the most-connected nodes (the hubs) so the graph
+// stays interactive. Vaults below this render in full (unchanged behaviour).
+const MAX_RENDERED_GRAPH_NODES = 2_000
 const COMMUNITY_WORKER_THRESHOLD = 3_000
 const MAX_CACHED_PROJECT_GRAPHS = 2
 const graphCache = new Map<string, { dataVersion: number; result: WikiGraphResult }>()
@@ -195,45 +201,67 @@ export async function buildWikiGraph(
 async function buildWikiGraphUncached(projectPath: string): Promise<WikiGraphResult> {
   const wikiRoot = `${normalizePath(projectPath)}/wiki`
 
-  let tree: FileNode[]
-  try {
-    tree = await listDirectory(wikiRoot)
-  } catch {
-    return { nodes: [], edges: [], communities: [] }
-  }
-
-  const mdFiles = flattenMdFiles(tree)
-  if (mdFiles.length === 0) {
-    return { nodes: [], edges: [], communities: [] }
-  }
-
   // Build a map of id -> node data
   const nodeMap = new Map<
     string,
     { id: string; label: string; type: string; path: string; links: string[] }
   >()
 
-  const parsedFiles = await mapWithConcurrency(
-    mdFiles,
-    GRAPH_FILE_READ_CONCURRENCY,
-    async (file) => {
-      try {
-        const content = await readFile(file.path)
-        const id = fileNameToId(file.name)
-        return {
-          id,
-          label: extractTitle(content, file.name),
-          type: extractType(content),
-          path: file.path,
-          links: extractWikilinks(content),
+  // Web build: one batch call. The server reads every page once (cached) and
+  // returns node data, so the graph doesn't round-trip ~1600 read_file calls
+  // over HTTP. The heavy force-layout still runs in the browser worker, so the
+  // VPS stays light. Desktop keeps the native per-file path below.
+  const isWeb =
+    typeof window !== "undefined" &&
+    !("__TAURI_INTERNALS__" in window) &&
+    !("__TAURI__" in window)
+
+  if (isWeb) {
+    let parsed: Array<{ id: string; label: string; type: string; path: string; links: string[] }>
+    try {
+      parsed = await invoke("wiki_graph_batch", { projectPath })
+    } catch {
+      return { nodes: [], edges: [], communities: [] }
+    }
+    if (!parsed || parsed.length === 0) {
+      return { nodes: [], edges: [], communities: [] }
+    }
+    for (const p of parsed) nodeMap.set(p.id, p)
+  } else {
+    let tree: FileNode[]
+    try {
+      tree = await listDirectory(wikiRoot)
+    } catch {
+      return { nodes: [], edges: [], communities: [] }
+    }
+
+    const mdFiles = flattenMdFiles(tree)
+    if (mdFiles.length === 0) {
+      return { nodes: [], edges: [], communities: [] }
+    }
+
+    const parsedFiles = await mapWithConcurrency(
+      mdFiles,
+      GRAPH_FILE_READ_CONCURRENCY,
+      async (file) => {
+        try {
+          const content = await readFile(file.path)
+          const id = fileNameToId(file.name)
+          return {
+            id,
+            label: extractTitle(content, file.name),
+            type: extractType(content),
+            path: file.path,
+            links: extractWikilinks(content),
+          }
+        } catch {
+          return null
         }
-      } catch {
-        return null
-      }
-    },
-  )
-  for (const parsed of parsedFiles) {
-    if (parsed) nodeMap.set(parsed.id, parsed)
+      },
+    )
+    for (const parsed of parsedFiles) {
+      if (parsed) nodeMap.set(parsed.id, parsed)
+    }
   }
 
   // Filter out query nodes (research results, saved chat answers) — they are
@@ -266,6 +294,30 @@ async function buildWikiGraphUncached(projectPath: string): Promise<WikiGraphRes
 
       linkCounts.set(sourceId, (linkCounts.get(sourceId) ?? 0) + 1)
       linkCounts.set(targetId, (linkCounts.get(targetId) ?? 0) + 1)
+    }
+  }
+
+  // Very large vault: keep only the top-N nodes by total link degree (hubs)
+  // and drop the weakly-connected tail, which would otherwise stall the
+  // browser force layout. Logged so the truncation is never silent.
+  if (nodeMap.size > MAX_RENDERED_GRAPH_NODES) {
+    const kept = new Set(
+      [...linkCounts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, MAX_RENDERED_GRAPH_NODES)
+        .map(([id]) => id),
+    )
+    console.warn(
+      `[wiki-graph] ${nodeMap.size} nodes exceeds render cap — showing top ${MAX_RENDERED_GRAPH_NODES} hubs`,
+    )
+    for (const id of [...nodeMap.keys()]) {
+      if (!kept.has(id)) {
+        nodeMap.delete(id)
+        linkCounts.delete(id)
+      }
+    }
+    for (let i = rawEdges.length - 1; i >= 0; i--) {
+      if (!kept.has(rawEdges[i].source) || !kept.has(rawEdges[i].target)) rawEdges.splice(i, 1)
     }
   }
 

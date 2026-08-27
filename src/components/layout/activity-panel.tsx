@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next"
 import { useActivityStore, type ActivityItem } from "@/stores/activity-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useFileSyncStore } from "@/stores/file-sync-store"
+import { getFileChangeQueue } from "@/commands/file-sync"
 import { normalizePath, getFileName, isAbsolutePath } from "@/lib/path-utils"
 import {
   getQueue,
@@ -98,6 +99,33 @@ export function ActivityPanel() {
       setQueueTasks([...getQueue()])
     }, 1000)
     return () => clearInterval(interval)
+  }, [])
+
+  // Web build: no desktop file watcher, so poll the ingest queue directly and
+  // push it into the File Sync store — live pending→processing→done, no refresh.
+  useEffect(() => {
+    const isWeb =
+      typeof window !== "undefined" &&
+      !("__TAURI_INTERNALS__" in window) &&
+      !("__TAURI__" in window)
+    if (!isWeb) return
+    let stop = false
+    const poll = async () => {
+      const project = useWikiStore.getState().project
+      if (!project) return
+      try {
+        const q = await getFileChangeQueue(project.path)
+        if (!stop) useFileSyncStore.getState().setTasks(q.tasks)
+      } catch {
+        /* ignore transient errors */
+      }
+    }
+    void poll()
+    const id = setInterval(() => void poll(), 1500)
+    return () => {
+      stop = true
+      clearInterval(id)
+    }
   }, [])
 
   useEffect(() => {

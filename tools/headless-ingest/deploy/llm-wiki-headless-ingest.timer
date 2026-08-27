@@ -1,0 +1,14 @@
+[Unit]
+Description=Periodic llm_wiki headless ingest (drains raw/sources)
+
+[Timer]
+# First run shortly after login/boot, then 5 min after each run FINISHES
+# (not fixed cadence) — no overlap, and idle CPU is 0 between runs.
+OnBootSec=2min
+OnStartupSec=1min
+OnUnitInactiveSec=5min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

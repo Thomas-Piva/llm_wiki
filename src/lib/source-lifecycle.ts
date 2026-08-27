@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core"
 import {
   copyFile,
   createDirectory,
@@ -289,7 +290,21 @@ export async function enqueueSourceIngest(
   const parsingConcurrency = options.parsingConcurrency
     ?? normalizeSourceWatchConfig(useWikiStore.getState().sourceWatchConfig).parsingConcurrency
   await preprocessSourceFiles(files.map((file) => file.sourcePath), parsingConcurrency)
-  return enqueueBatch(project.id, files)
+  const ids = await enqueueBatch(project.id, files)
+  // Web build has no in-process queue runner — kick the headless drain service
+  // so the just-enqueued files ingest immediately (O(1), no full sources walk).
+  if (
+    typeof window !== "undefined" &&
+    !("__TAURI_INTERNALS__" in window) &&
+    !("__TAURI__" in window)
+  ) {
+    try {
+      await invoke("start_ingest_drain")
+    } catch {
+      /* trigger is best-effort */
+    }
+  }
+  return ids
 }
 
 export async function importSourceFiles(
@@ -324,9 +339,15 @@ export async function importSourceFiles(
     }
     if (!allowed) continue
 
-    const destPath = await getUniqueDestPath(`${pp}/raw/sources`, originalName)
+    // Web: /upload already placed the file in raw/sources, so `sourcePath`
+    // IS the destination — copying it again would create a "foo-1.pdf"
+    // duplicate. Only copy when the source lives outside raw/sources.
+    const alreadyInSources = normalizePath(sourcePath).startsWith(`${pp}/raw/sources/`)
     try {
-      await copyFile(sourcePath, destPath)
+      const destPath = alreadyInSources
+        ? sourcePath
+        : await getUniqueDestPath(`${pp}/raw/sources`, originalName)
+      if (!alreadyInSources) await copyFile(sourcePath, destPath)
       importedPaths.push(destPath)
     } catch (err) {
       console.error(`Failed to import ${originalName}:`, err)

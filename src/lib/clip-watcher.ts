@@ -12,6 +12,8 @@ let intervalId: ReturnType<typeof setInterval> | null = null
  */
 export function startClipWatcher() {
   if (intervalId) return // Already running
+  // Web build: no local clip server — skip the poll (it would only CORS-fail).
+  if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window) && !("__TAURI__" in window)) return
 
   intervalId = setInterval(async () => {
     try {

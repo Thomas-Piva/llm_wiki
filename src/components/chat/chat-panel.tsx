@@ -739,9 +739,17 @@ export function ChatPanel() {
         activeRunIdRef.current = backendRunId
         const isCurrentRun = () => runIdRef.current === runId && !controller.signal.aborted
 
+        // On the web build the agent runs server-side (POST /agent-stream via the
+        // core shim), so always use it — never the in-browser streamChat path
+        // (which would fetch the LLM endpoint directly and hit CORS).
+        const isWebBuild =
+          typeof window !== "undefined" &&
+          !("__TAURI_INTERNALS__" in window) &&
+          !("__TAURI__" in window)
         const useBackendAgent =
-          llmConfig.provider !== "claude-code" &&
-          llmConfig.provider !== "codex-cli"
+          isWebBuild ||
+          (llmConfig.provider !== "claude-code" &&
+            llmConfig.provider !== "codex-cli")
 
         if (useBackendAgent) {
           setAgentEvents([

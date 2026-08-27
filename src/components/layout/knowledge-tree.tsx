@@ -5,6 +5,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
+import { invoke } from "@tauri-apps/api/core"
 import { readFile, listDirectory } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
@@ -57,6 +58,26 @@ export function KnowledgeTree() {
     if (!project) return
     const pp = normalizePath(project.path)
     try {
+      // Web build: one batch call instead of a sequential read_file per page
+      // (~1600 HTTP round-trips = the tree never finishing). The server reads
+      // everything once (cached); the VPS stays light.
+      const isWeb =
+        typeof window !== "undefined" &&
+        !("__TAURI_INTERNALS__" in window) &&
+        !("__TAURI__" in window)
+      if (isWeb) {
+        const batch = await invoke<Array<{ label: string; type: string; path: string; tags?: string[] }>>(
+          "wiki_graph_batch",
+          { projectPath: project.path },
+        )
+        setPages(
+          batch
+            .filter((b) => !b.path.endsWith("/index.md") && !b.path.endsWith("/log.md"))
+            .map((b) => ({ path: b.path, title: b.label, type: b.type, tags: b.tags ?? [] })),
+        )
+        return
+      }
+
       const wikiTree = await listDirectory(`${pp}/wiki`)
       const mdFiles = flattenMdFiles(wikiTree)
 

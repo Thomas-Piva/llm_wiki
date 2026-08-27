@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Wiki — light UI</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --fg:#e6e9ef; --muted:#8b94a7; --accent:#6ea8fe; --accent2:#7ee787; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:10px 14px; border-bottom:1px solid var(--line); display:flex; gap:12px; align-items:center; }
+  header b { color:var(--accent2); }
+  header .stat { color:var(--muted); font-size:12px; margin-left:auto; }
+  #search { flex:1; max-width:520px; padding:8px 12px; background:var(--panel); border:1px solid var(--line); border-radius:8px; color:var(--fg); }
+  .wrap { display:grid; grid-template-columns:320px 1fr; height:calc(100vh - 53px); }
+  .side { border-right:1px solid var(--line); overflow:auto; padding:8px; }
+  .tabs { display:flex; gap:6px; margin-bottom:8px; }
+  .tab { flex:1; text-align:center; padding:6px; background:var(--panel); border:1px solid var(--line); border-radius:6px; cursor:pointer; color:var(--muted); font-size:12px; }
+  .tab.active { color:var(--fg); border-color:var(--accent); }
+  .item { padding:7px 9px; border-radius:6px; cursor:pointer; border:1px solid transparent; }
+  .item:hover { background:var(--panel); }
+  .item .t { color:var(--fg); }
+  .item .p { color:var(--muted); font-size:11px; word-break:break-all; }
+  .item .s { color:var(--muted); font-size:12px; margin-top:2px; }
+  .content { overflow:auto; padding:24px 32px; }
+  .content h1 { border-bottom:1px solid var(--line); padding-bottom:8px; }
+  .content a.wl { color:var(--accent); text-decoration:none; border-bottom:1px dotted var(--accent); cursor:pointer; }
+  .content pre { background:var(--panel); padding:12px; border-radius:8px; overflow:auto; }
+  .content code { background:var(--panel); padding:1px 5px; border-radius:4px; }
+  .content img { max-width:100%; }
+  .fm { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:16px; font-size:12px; color:var(--muted); white-space:pre-wrap; }
+  .empty { color:var(--muted); padding:40px; text-align:center; }
+  .dir { color:var(--muted); font-weight:600; margin:6px 0 2px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <b>🧠 wiki</b>
+  <input id="search" placeholder="Cerca nel brain… (invio)" autocomplete="off" />
+  <span class="stat" id="stat"></span>
+</header>
+<div class="wrap">
+  <div class="side">
+    <div class="tabs">
+      <div class="tab active" data-tab="results">Risultati</div>
+      <div class="tab" data-tab="files">Pagine</div>
+      <div class="tab" data-tab="graph">Grafo</div>
+    </div>
+    <div id="list"></div>
+  </div>
+  <div class="content"><div class="empty" id="content">Cerca o scegli una pagina.</div></div>
+</div>
+<script>
+const API = "/api/v1/projects/current";
+const $ = s => document.querySelector(s);
+const list = $("#list"), content = $(".content"), stat = $("#stat");
+let filesCache = null, basenameMap = null;
+
+async function api(path, opts) {
+  const r = await fetch(API + path, opts);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+
+function setTab(name) {
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+}
+
+async function doSearch(q) {
+  if (!q.trim()) return;
+  setTab("results");
+  list.innerHTML = "<div class='empty'>…</div>";
+  const d = await api("/search", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ query:q, topK:40 }) });
+  stat.textContent = d.results.length + " risultati";
+  list.innerHTML = "";
+  if (!d.results.length) { list.innerHTML = "<div class='empty'>Niente.</div>"; return; }
+  for (const r of d.results) {
+    const el = document.createElement("div");
+    el.className = "item";
+    el.innerHTML = `<div class="t">${esc(r.title)}</div><div class="p">${esc(r.path)}</div>${r.snippet?`<div class="s">${esc(r.snippet)}</div>`:""}`;
+    el.onclick = () => openPage(r.path);
+    list.appendChild(el);
+  }
+}
+
+async function loadFiles() {
+  if (filesCache) return filesCache;
+  const d = await api("/files?root=wiki&recursive=true&maxFiles=10000");
+  const flat = [];
+  (function walk(nodes){ for (const n of nodes){ if (n.isDir && n.children) walk(n.children); else if (!n.isDir) flat.push(n.path); } })(d.files);
+  filesCache = flat.filter(p => p.endsWith(".md")).sort();
+  basenameMap = new Map();
+  for (const p of filesCache) basenameMap.set(p.split("/").pop().replace(/\.md$/,"").toLowerCase(), p);
+  return filesCache;
+}
+
+async function showFiles() {
+  setTab("files");
+  list.innerHTML = "<div class='empty'>…</div>";
+  const files = await loadFiles();
+  stat.textContent = files.length + " pagine";
+  list.innerHTML = "";
+  let curDir = "";
+  for (const p of files) {
+    const dir = p.split("/").slice(0,-1).join("/");
+    if (dir !== curDir) { curDir = dir; const h=document.createElement("div"); h.className="dir"; h.textContent="📁 "+dir; list.appendChild(h); }
+    const el = document.createElement("div");
+    el.className = "item";
+    el.innerHTML = `<div class="t">${esc(p.split("/").pop().replace(/\.md$/,""))}</div>`;
+    el.onclick = () => openPage(p);
+    list.appendChild(el);
+  }
+}
+
+async function showGraph() {
+  setTab("graph");
+  list.innerHTML = "<div class='empty'>…</div>";
+  const d = await api("/graph?limit=60");
+  stat.textContent = d.nodes.length + " nodi / " + d.edges.length + " archi";
+  list.innerHTML = "";
+  for (const n of d.nodes) {
+    const el = document.createElement("div");
+    el.className = "item";
+    el.innerHTML = `<div class="t">${esc(n.label)}</div><div class="s">${esc(n.nodeType)} · ${n.linkCount} link</div>`;
+    el.onclick = () => n.path ? openPage(n.path) : openByName(n.label);
+    list.appendChild(el);
+  }
+}
+
+async function openPage(path) {
+  content.innerHTML = "<div class='empty'>…</div>";
+  try {
+    const d = await api("/files/content?path=" + encodeURIComponent(path));
+    await loadFiles();
+    render(d.content, path);
+  } catch { content.innerHTML = "<div class='empty'>Errore nel caricare "+esc(path)+"</div>"; }
+}
+
+async function openByName(name) {
+  await loadFiles();
+  const p = basenameMap.get(name.toLowerCase());
+  if (p) openPage(p); else doSearch(name);
+}
+
+function render(md, path) {
+  let fm = "";
+  const m = /^---\n([\s\S]*?)\n---\n?/.exec(md);
+  let body = md;
+  if (m) { fm = m[1]; body = md.slice(m[0].length); }
+  // [[link]] and [[link|label]] -> clickable
+  body = body.replace(/\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|([^\]]+))?\]\]/g, (_,tgt,lbl) =>
+    `<a class="wl" data-wl="${escAttr(tgt.trim())}">${esc((lbl||tgt).trim())}</a>`);
+  content.innerHTML = (fm?`<div class="fm">${esc(fm)}</div>`:"") + marked.parse(body);
+  content.querySelectorAll("a.wl").forEach(a => a.onclick = () => openByName(a.dataset.wl));
+  content.scrollTop = 0;
+  stat.textContent = path;
+}
+
+const esc = s => (s||"").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const escAttr = s => esc(s).replace(/"/g,"&quot;");
+
+$("#search").addEventListener("keydown", e => { if (e.key==="Enter") doSearch(e.target.value); });
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
+  if (t.dataset.tab==="files") showFiles();
+  else if (t.dataset.tab==="graph") showGraph();
+  else setTab("results");
+});
+// boot
+openByName("index").catch(()=>{});
+showFiles();
+</script>
+</body>
+</html>

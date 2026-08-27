@@ -31,6 +31,30 @@ const SOURCE_TREE_INITIAL_ROWS = 160
 const SOURCE_TREE_LOAD_BATCH = 160
 type SourceIngestStatus = "not-ingested" | "ingested" | IngestTask["status"]
 
+// Web build (no Tauri): the vault can be huge (Milena ~300GB). A full
+// recursive walk over HTTP would hang the panel, so on web we load the
+// source tree ONE level at a time and fetch a folder's children only
+// when it's expanded. Desktop keeps the eager recursive load.
+const IS_WEB_BUILD =
+  typeof window !== "undefined" &&
+  !("__TAURI_INTERNALS__" in window) &&
+  !("__TAURI__" in window)
+
+/** Immutably attach freshly-loaded `children` to the node at `targetPath`. */
+function mergeLoadedChildren(
+  nodes: FileNode[],
+  targetPath: string,
+  children: FileNode[],
+): FileNode[] {
+  return nodes.map((node) => {
+    if (node.path === targetPath) return { ...node, children }
+    if (node.is_dir && node.children) {
+      return { ...node, children: mergeLoadedChildren(node.children, targetPath, children) }
+    }
+    return node
+  })
+}
+
 export function SourcesView() {
   const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
@@ -79,14 +103,31 @@ export function SourcesView() {
     if (!project) return
     const pp = normalizePath(project.path)
     try {
-      const tree = await listDirectory(`${pp}/raw/sources`, true)
-      setSources(filterRawSourceTree(tree))
+      const tree = IS_WEB_BUILD
+        ? await listDirectory(`${pp}/raw/sources`, { includeHidden: true, maxDepth: 0 })
+        : await listDirectory(`${pp}/raw/sources`, true)
+      setSources(filterRawSourceTree(tree, { lazy: IS_WEB_BUILD }))
       setRefreshError(null)
     } catch (err) {
       setRefreshError(String(err))
       setSources([])
     }
   }, [project])
+
+  // Web lazy load: fetch a folder's immediate children on first expand and
+  // merge them into the tree. No-op on desktop (children already present).
+  const loadChildren = useCallback(async (node: FileNode) => {
+    if (!IS_WEB_BUILD || node.children !== undefined) return
+    try {
+      const kids = await listDirectory(node.path, { includeHidden: true, maxDepth: 0 })
+      const filtered = filterRawSourceTree(kids, { lazy: true })
+      setSources((prev) => mergeLoadedChildren(prev, node.path, filtered))
+    } catch (err) {
+      // Mark as loaded-but-empty so the spinner stops; surface nothing noisy.
+      console.warn("[sources] lazy load failed:", node.path, err)
+      setSources((prev) => mergeLoadedChildren(prev, node.path, []))
+    }
+  }, [])
 
   useEffect(() => {
     loadSources()
@@ -217,11 +258,17 @@ export function SourcesView() {
       title: t("sources.importSourceFolder"),
     })
 
-    if (!selected || typeof selected !== "string") return
+    if (!selected) return
 
     setImporting(true)
     try {
-      await importSourceFolder(project, selected, llmConfig, sourceWatchConfig)
+      if (Array.isArray(selected)) {
+        // Web: the directory picker already uploaded every file in the folder
+        // to raw/sources — ingest them as a batch (no server-side folder to walk).
+        await importSourceFiles(project, selected, llmConfig, sourceWatchConfig)
+      } else {
+        await importSourceFolder(project, selected, llmConfig, sourceWatchConfig)
+      }
       await loadSources()
     } catch (err) {
       console.error(`Failed to import folder:`, err)
@@ -500,6 +547,8 @@ export function SourcesView() {
               onIngest={handleIngest}
               onDelete={handleDelete}
               onDeleteFolder={handleDeleteFolder}
+              onExpandDir={loadChildren}
+              lazyLoad={IS_WEB_BUILD}
               pendingDeletePath={pendingDeletePath}
               setPendingDeletePath={setPendingDeletePath}
               ingestingPath={ingestingPath}
@@ -594,13 +643,14 @@ function sortSourceNodes(nodes: readonly FileNode[]): FileNode[] {
 function flattenVisibleRows(
   nodes: readonly FileNode[],
   collapsed: Record<string, boolean>,
+  defaultCollapsed = false,
   depth = 0,
 ): SourceTreeRow[] {
   const rows: SourceTreeRow[] = []
   for (const node of sortSourceNodes(nodes)) {
     rows.push({ node, depth })
-    if (node.is_dir && node.children && !(collapsed[node.path] ?? false)) {
-      rows.push(...flattenVisibleRows(node.children, collapsed, depth + 1))
+    if (node.is_dir && node.children && !(collapsed[node.path] ?? defaultCollapsed)) {
+      rows.push(...flattenVisibleRows(node.children, collapsed, defaultCollapsed, depth + 1))
     }
   }
   return rows
@@ -613,6 +663,8 @@ function SourceTree({
   onIngest,
   onDelete,
   onDeleteFolder,
+  onExpandDir,
+  lazyLoad,
   pendingDeletePath,
   setPendingDeletePath,
   ingestingPath,
@@ -625,6 +677,10 @@ function SourceTree({
   onIngest: (node: FileNode) => void
   onDelete: (node: FileNode) => void
   onDeleteFolder: (node: FileNode) => void
+  /** Web lazy load: fetch a folder's children the first time it expands. */
+  onExpandDir: (node: FileNode) => void
+  /** Web build: folders start collapsed and load children on demand. */
+  lazyLoad: boolean
   /** Path of the node currently in "click again to confirm" state.
    *  Lifted to the parent so only ONE button is armed at a time
    *  across the whole tree — clicking another delete arms that one
@@ -639,9 +695,12 @@ function SourceTree({
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [visibleLimit, setVisibleLimit] = useState(SOURCE_TREE_INITIAL_ROWS)
   const loadMoreRef = useRef<HTMLDivElement | null>(null)
+  // Web dirs default to collapsed (lazy); search (forceExpanded) reveals
+  // whatever children are already loaded.
+  const defaultCollapsed = forceExpanded ? false : lazyLoad
   const rows = useMemo(
-    () => flattenVisibleRows(nodes, forceExpanded ? {} : collapsed),
-    [collapsed, forceExpanded, nodes],
+    () => flattenVisibleRows(nodes, forceExpanded ? {} : collapsed, defaultCollapsed),
+    [collapsed, defaultCollapsed, forceExpanded, nodes],
   )
   const visibleRows = rows.slice(0, visibleLimit)
   const hasMore = visibleLimit < rows.length
@@ -664,8 +723,12 @@ function SourceTree({
     return () => observer.disconnect()
   }, [hasMore, rows.length])
 
-  const toggle = (path: string) => {
-    setCollapsed((prev) => ({ ...prev, [path]: !prev[path] }))
+  const toggle = (node: FileNode, currentlyCollapsed: boolean) => {
+    setCollapsed((prev) => ({ ...prev, [node.path]: !currentlyCollapsed }))
+    // First expand of a not-yet-loaded folder (web lazy) → fetch its children.
+    if (currentlyCollapsed && lazyLoad && node.children === undefined) {
+      onExpandDir(node)
+    }
   }
 
   /**
@@ -696,8 +759,8 @@ function SourceTree({
       {visibleRows.map(({ node, depth }) => {
         const isPendingDelete = pendingDeletePath === node.path
         const ingestStatus = sourceStatuses.get(normalizePath(node.path)) ?? "not-ingested"
-        if (node.is_dir && node.children) {
-          const isCollapsed = !forceExpanded && (collapsed[node.path] ?? false)
+        if (node.is_dir) {
+          const isCollapsed = !forceExpanded && (collapsed[node.path] ?? defaultCollapsed)
           return (
             <div key={node.path}>
               <div
@@ -706,7 +769,7 @@ function SourceTree({
               >
                 <button
                   onClick={() => {
-                    if (!forceExpanded) toggle(node.path)
+                    if (!forceExpanded) toggle(node, isCollapsed)
                   }}
                   className="flex flex-1 items-center gap-1.5 px-1 py-1 text-left"
                 >
@@ -718,7 +781,7 @@ function SourceTree({
                   <Folder className="h-4 w-4 shrink-0 text-amber-500" />
                   <span className="truncate font-medium">{node.name}</span>
                   <span className="ml-auto text-[10px] text-muted-foreground/60 shrink-0">
-                    {countFiles(node.children)}
+                    {node.children ? countFiles(node.children) : ""}
                   </span>
                 </button>
                 <DeleteButton

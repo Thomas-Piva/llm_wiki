@@ -15,7 +15,22 @@ export function isHiddenRawSourceEntryName(name: string): boolean {
   return HIDDEN_SOURCE_ENTRY_NAMES.has(name)
 }
 
-export function filterRawSourceTree(nodes: FileNode[]): FileNode[] {
+export interface FilterRawSourceTreeOptions {
+  /**
+   * Lazy mode (web, huge vaults): a directory whose `children` is
+   * `undefined` has NOT been loaded yet — keep it untouched instead of
+   * pruning it as "empty". Only directories that were actually loaded
+   * and came back empty get pruned. Off by default → desktop behaviour
+   * (full recursive tree) is unchanged.
+   */
+  lazy?: boolean
+}
+
+export function filterRawSourceTree(
+  nodes: FileNode[],
+  options: FilterRawSourceTreeOptions = {},
+): FileNode[] {
+  const lazy = options.lazy ?? false
   return nodes
     .filter((node) =>
       !isHiddenRawSourceEntryName(node.name) &&
@@ -23,9 +38,14 @@ export function filterRawSourceTree(nodes: FileNode[]): FileNode[] {
     )
     .map((node) => {
       if (!node.is_dir) return node
-      return { ...node, children: filterRawSourceTree(node.children ?? []) }
+      if (lazy && node.children === undefined) return node // unloaded — leave as-is
+      return { ...node, children: filterRawSourceTree(node.children ?? [], options) }
     })
-    .filter((node) => !node.is_dir || (node.children && node.children.length > 0))
+    .filter((node) => {
+      if (!node.is_dir) return true
+      if (lazy && node.children === undefined) return true // unloaded dir — keep
+      return Boolean(node.children && node.children.length > 0)
+    })
 }
 
 export function isSensitiveConfigSourceFile(path: string): boolean {

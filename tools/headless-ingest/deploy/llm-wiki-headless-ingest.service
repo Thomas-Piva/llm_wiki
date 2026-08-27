@@ -1,0 +1,25 @@
+[Unit]
+Description=llm_wiki headless ingest — low-resource, no webview
+Documentation=file:%h/llm_wiki_fork/tools/headless-ingest
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# PROJECT / CONCURRENCY / MAX_SIZE + HEADLESS_LLM_* (provider, model, endpoint,
+# key) live here. chmod 600 — it holds the API key.
+EnvironmentFile=%h/.config/llm-wiki-headless/env
+WorkingDirectory=%h/llm_wiki_fork
+# One pass: scan raw/sources into the queue, drain it, delete ingested sources
+# (storage O(1)), then exit. The timer re-runs it, so idle CPU is 0.
+# NOTE: adjust the bun path if it is not in ~/.local/bin.
+ExecStart=%h/.local/bin/bun --smol --preload tools/headless-ingest/preload.ts tools/headless-ingest/run.ts --project ${PROJECT} --scan --delete-after --concurrency ${CONCURRENCY} --max-size ${MAX_SIZE}
+
+# ── Resource ceiling: single-thread ingest can never trip VPS fair-use ──
+CPUQuota=60%
+MemoryMax=700M
+MemoryHigh=500M
+Nice=15
+IOSchedulingClass=idle
+# Raise if a single batch legitimately needs longer than an hour.
+TimeoutStartSec=3600
