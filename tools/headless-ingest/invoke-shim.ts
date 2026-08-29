@@ -131,9 +131,65 @@ async function listDir(
   return out
 }
 
+/**
+ * Run a local extraction tool and return its stdout. Never hangs, never leaks.
+ *
+ * Two ways a spawned tool stops an ingest dead, both paid for in production:
+ *
+ *  1. **stderr nobody reads.** Node opens a pipe for stderr whether or not you
+ *     listen to it. A malformed PDF makes `pdftotext` print thousands of
+ *     "Syntax Error" lines; once ~64 KB of them fill the pipe buffer, the tool
+ *     blocks inside write() and waits for a reader that never comes. It shows
+ *     up as a process consuming **zero CPU** — asleep, not working. On the
+ *     client's box that cost **ten and a half hours** of an overnight run,
+ *     silently: the service still read as "activating".
+ *  2. **No deadline.** A tool that genuinely takes forever on one pathological
+ *     file blocks every file behind it.
+ *
+ * So: stderr is discarded at the OS level (`ignore` — no pipe, nothing to
+ * fill), and a timeout kills the process and gives back whatever it produced.
+ * Partial text beats a stalled queue.
+ */
+function runTool(bin: string, argv: string[], timeoutMs = 5 * 60_000): Promise<string> {
+  return new Promise((resolve) => {
+    // stdin ignored, stdout piped, stderr ignored: the only pipe is the one
+    // this function actually drains.
+    const child = spawn(bin, argv, { stdio: ["ignore", "pipe", "ignore"] })
+    let out = ""
+    let settled = false
+    const done = (why?: string) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (why) console.warn(`[${bin}] ${why} — ${out.length} caratteri raccolti da ${argv[argv.length - 1]}`)
+      resolve(out)
+    }
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL")
+      done(`superati ${Math.round(timeoutMs / 1000)}s, interrotto`)
+    }, timeoutMs)
+    child.stdout.on("data", (d) => { out += d })
+    child.on("error", (e) => done(`non eseguibile: ${e.message}`))
+    child.on("close", () => done())
+  })
+}
+
 /** Dispatch a Tauri command name to its Node equivalent. */
 export async function invoke<T = unknown>(cmd: string, args: any = {}): Promise<T> {
   switch (cmd) {
+    /**
+     * Pull the text a PDF already contains, locally.
+     *
+     * Most PDFs here are digital: the words are in the file, and reading them is
+     * a copy, not an interpretation. Sending those to a cloud parser costs a
+     * round-trip and a fee for something `pdftotext` does in milliseconds —
+     * measured on this vault, 765 PDFs a minute, with 18 of 20 yielding full
+     * text. The other two are scans, where there is nothing to copy: those
+     * return "" and the caller falls back to MinerU.
+     */
+    case "pdf_extract_text": {
+      return (await runTool("pdftotext", ["-layout", "-enc", "UTF-8", String(args.path), "-"])) as T
+    }
     case "read_file": {
       // Mirror the Rust `read_file`: prefer a sibling `.cache/<name>.txt`
       // when it is at least as new as the source. MinerU (PDF) and the media
@@ -223,10 +279,83 @@ export async function invoke<T = unknown>(cmd: string, args: any = {}): Promise<
       // extractor simply read as-is (text-first limitation).
       return "no preprocessing needed" as T
 
-    case "extract_and_save_pdf_images_cmd":
+    /**
+     * Pull the images out of a PDF locally.
+     *
+     * This used to be a no-op, because headless got its images from MinerU's
+     * result zip. Now that a digital PDF is read with `pdftotext` and never
+     * reaches MinerU, that arrangement would silently drop every figure — a
+     * 380,000-character book with 48 illustrations came through with none.
+     *
+     * `pdfimages` ships in the same package as `pdftotext`: same cost (none),
+     * same machine. Decorative fragments are filtered out by size, otherwise a
+     * book's bullets and rules would each become a captioned "image".
+     */
+    case "extract_and_save_pdf_images_cmd": {
+      const src = String(args.sourcePath)
+      const destDir = String(args.destDir)
+      const relTo = String(args.relTo)
+      const MIN_EDGE = 200
+
+      // One document must not turn into hundreds of paid captions: a trademark
+      // search report came back with 833 embedded fragments. Keep the largest —
+      // area is a good proxy for "this is a figure, not a rule or a glyph".
+      const MAX_PER_DOC = 40
+
+      const listing = await runTool("pdfimages", ["-list", src], 2 * 60_000)
+      // columns: page num type width height ...
+      const meta = new Map<string, { page: number; width: number; height: number }>()
+      for (const line of listing.split("\n").slice(2)) {
+        const c = line.trim().split(/\s+/)
+        if (c.length < 5 || !/^\d+$/.test(c[0]) || !/^\d+$/.test(c[1])) continue
+        const width = Number(c[3])
+        const height = Number(c[4])
+        if (width < MIN_EDGE || height < MIN_EDGE) continue
+        // `-p` names files <prefix>-<page>-<num>.<ext>, both zero-padded to 3.
+        meta.set(`${c[0].padStart(3, "0")}-${c[1].padStart(3, "0")}`, { page: Number(c[0]), width, height })
+      }
+      if (!meta.size) return [] as T
+
+      await fs.mkdir(destDir, { recursive: true })
+      const prefix = join(destDir, "img")
+      // `-png` rather than `-all`: `-all` leaves fax-encoded pages as raw
+      // .ccitt + .params pairs, which are not images anything can open.
+      // Files already on disk when the deadline hits are still usable, so a
+      // kill here degrades the result instead of losing it.
+      await runTool("pdfimages", ["-png", "-p", src, prefix], 5 * 60_000)
+
+      const files = (await fs.readdir(destDir).catch(() => [] as string[]))
+        .filter((f) => /^img-\d+-\d+\.png$/.test(f))
+      // Match each file to its row by the page/index in its own name, not by
+      // position: the listing includes images that were filtered out, so the
+      // two orders do not line up.
+      const candidates: Array<{ abs: string; m: { page: number; width: number; height: number } }> = []
+      for (const f of files) {
+        const key = f.replace(/^img-/, "").replace(/\.png$/, "")
+        const m = meta.get(key)
+        const abs = join(destDir, f)
+        if (!m) {
+          await fs.rm(abs, { force: true })
+          continue
+        }
+        candidates.push({ abs, m })
+      }
+      candidates.sort((a, b) => b.m.width * b.m.height - a.m.width * a.m.height)
+      for (const extra of candidates.slice(MAX_PER_DOC)) await fs.rm(extra.abs, { force: true })
+
+      return candidates.slice(0, MAX_PER_DOC).map((c, i) => ({
+        index: i + 1,
+        mimeType: "image/png",
+        page: c.m.page,
+        width: c.m.width,
+        height: c.m.height,
+        relPath: c.abs.startsWith(relTo + "/") ? c.abs.slice(relTo.length + 1) : c.abs,
+        absPath: c.abs,
+      })) as T
+    }
     case "extract_and_save_office_images_cmd":
-      // pdfium/OOXML standalone image extraction is native-only. Headless relies
-      // on MinerU's own images (from its result zip), so these are no-ops.
+      // OOXML extraction is still native-only; Office files carry their text
+      // through anydoc, and their figures are rarer than in PDFs.
       return [] as T
 
     case "extract_audio_track": {
