@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core"
 import { readFile, listDirectory } from "@/commands/fs"
 import { streamChat } from "@/lib/llm-client"
 import type { LlmConfig } from "@/stores/wiki-store"
@@ -156,6 +157,18 @@ export async function runStructuralLint(
   projectPath: string,
   options: StructuralLintOptions = {},
 ): Promise<LintResult[]> {
+  // When a backend is serving the vault it can lint next to the disk in one
+  // call. Reading every page over HTTP does not finish on a large vault.
+  // The desktop has no such command, so it falls through to the local path.
+  try {
+    const server = await invoke<{ findings?: StructuralLintFinding[] }>("structural_lint", {
+      projectPath: normalizePath(projectPath),
+    })
+    if (server?.findings) return server.findings
+  } catch {
+    /* no server-side lint — compute it here */
+  }
+
   const wikiRoot = `${normalizePath(projectPath)}/wiki`
   let tree: FileNode[]
   try {

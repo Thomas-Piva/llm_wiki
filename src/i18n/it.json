@@ -647,7 +647,16 @@
         "legacyPromptTitle": "Rilevato indice per pagina del vecchio formato",
         "legacyPromptBody": "Il tuo progetto ha {{count}} voci nel vecchio archivio vettoriale per pagina. Il nuovo indice per chunk offre un recupero migliore, ma richiede una reindicizzazione una tantum. Esegui \"Reindicizza tutte le pagine\" per aggiornarlo.",
         "dropLegacy": "Elimina il vecchio indice",
-        "dropLegacyDone": "Vecchio indice rimosso."
+        "dropLegacyDone": "Vecchio indice rimosso.",
+        "r2r": {
+          "enableLabel": "Motore di ricerca semantica (R2R)",
+          "enableHint": "Rispondi alla ricerca semantica con un motore R2R che indicizza tutto il vault, invece di calcolare gli embedding pagina per pagina da qui.",
+          "baseUrlLabel": "Indirizzo del motore",
+          "check": "Verifica",
+          "reachable": "Raggiungibile",
+          "unreachable": "Non raggiungibile",
+          "documents": "documenti indicizzati"
+        }
       },
       "multimodal": {
         "title": "Didascalie immagini",
@@ -682,7 +691,9 @@
         "costPoint1": "Ogni nuova immagine genera una chiamata all'LLM di visione (~500-2000 token a seconda del modello e della modalità di ragionamento).",
         "costPoint2": "Le didascalie sono in cache per SHA-256 dei byte dell'immagine. Loghi duplicati e template di grafici condivisi tra documenti costano UNA sola chiamata.",
         "costPoint3": "Un filtro lato Rust scarta le immagini più piccole di 100×100 px e si ferma a 500 immagini per fonte: i PDF fuori norma non possono far esplodere la spesa.",
-        "costPoint4": "Per l'elaborazione di grandi volumi preferisci un modello di visione locale (Qwen2.5-VL con LM Studio / Ollama); riserva le API di visione remote ai singoli documenti critici."
+        "costPoint4": "Per l'elaborazione di grandi volumi preferisci un modello di visione locale (Qwen2.5-VL con LM Studio / Ollama); riserva le API di visione remote ai singoli documenti critici.",
+        "fallbackModel": "Modello di riserva",
+        "fallbackModelHint": "Usato da solo quando il modello sopra è a quota, limitato o in errore. Stesso fornitore e stesse credenziali, modello diverso. Lascia vuoto per fermarti invece di proseguire."
       },
       "webSearch": {
         "title": "Fonti di informazione esterne",

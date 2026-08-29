@@ -145,6 +145,8 @@ function initialDraft(
     embeddingConcurrency: embed.concurrency ?? 1,
     embeddingBatchSize: embed.batchSize ?? 1,
     embeddingExtraHeaders: embed.extraHeaders ?? {},
+    r2rEnabled: embed.r2r?.enabled === true,
+    r2rBaseUrl: embed.r2r?.baseUrl ?? "http://127.0.0.1:7272",
     multimodalEnabled: multimodal.enabled,
     multimodalUseMainLlm: multimodal.useMainLlm,
     multimodalProvider: multimodal.provider,
@@ -156,6 +158,7 @@ function initialDraft(
     multimodalAzureModelFamily: multimodal.azureModelFamily ?? "auto",
     multimodalApiMode: multimodal.apiMode,
     multimodalConcurrency: multimodal.concurrency,
+    multimodalFallbackModel: multimodal.fallbackModel ?? "",
     outputLanguage,
     maxHistoryMessages,
     proxyEnabled: proxy.enabled,
@@ -404,6 +407,7 @@ export function SettingsView() {
       concurrency: Math.max(1, Math.min(32, Math.floor(draft.embeddingConcurrency || 1))),
       batchSize: Math.max(1, Math.min(64, Math.floor(draft.embeddingBatchSize || 1))),
       extraHeaders: draft.embeddingExtraHeaders,
+      r2r: { enabled: draft.r2rEnabled, baseUrl: draft.r2rBaseUrl.trim() },
     }
     const newMultimodal = {
       enabled: draft.multimodalEnabled,
@@ -423,6 +427,7 @@ export function SettingsView() {
       // going wider than ~16 just queues behind the server's batch
       // slot.
       concurrency: Math.max(1, Math.min(16, draft.multimodalConcurrency || 4)),
+      fallbackModel: draft.multimodalFallbackModel.trim(),
     }
 
     const newProxy = {

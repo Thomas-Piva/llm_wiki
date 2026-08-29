@@ -38,6 +38,10 @@ export interface SettingsDraft {
   embeddingBatchSize: number
   /** Extra HTTP headers to send on every embedding request. Empty = none. */
   embeddingExtraHeaders: Record<string, string>
+  /** Serve semantic search from an R2R engine instead of the local vector table. */
+  r2rEnabled: boolean
+  /** Base URL of that engine, e.g. "http://127.0.0.1:7272". */
+  r2rBaseUrl: string
 
   // Multimodal (image captioning at ingest time)
   multimodalEnabled: boolean
@@ -51,6 +55,8 @@ export interface SettingsDraft {
   multimodalAzureModelFamily: AzureModelFamily
   multimodalApiMode: CustomApiMode | undefined
   multimodalConcurrency: number
+  /** Model used for captions when the primary is out of quota. Empty = none. */
+  multimodalFallbackModel: string
 
   // Output preferences
   outputLanguage: string

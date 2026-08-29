@@ -17,6 +17,8 @@ import { readFile, writeFile, readdir, stat } from "node:fs/promises"
 import { resolve, join, relative, sep, basename } from "node:path"
 import { enqueueSources } from "./sources-scan"
 import { embedTexts, vectorSearchChunks } from "./vector-store"
+import { r2rConfigFor, r2rSearch, r2rHealth } from "./r2r-search"
+import { runStructuralLintOnDisk } from "./lint-runner"
 
 const execFileAsync = promisify(execFile)
 
@@ -211,6 +213,13 @@ async function embeddingConfigFor(vault: string): Promise<Record<string, any> | 
  *  chunk per page, resolve paths. Returns [] when embeddings aren't configured
  *  or the index is empty — search then stays keyword-only. */
 async function semanticSearch(vault: string, query: string, topK: number) {
+  // R2R wins when it's configured: it holds the whole corpus, LanceDB only what
+  // the desktop app embedded. Same output shape either way.
+  const r2r = await r2rConfigFor(vault)
+  if (r2r) {
+    const idx = await pageIndex(vault)
+    return r2rSearch(r2r, query, topK, (id) => idx.get(id))
+  }
   const cfg = await embeddingConfigFor(vault)
   if (!cfg || !query.trim()) return []
   let qvec: number[] | undefined
@@ -331,6 +340,23 @@ export async function handleVaultApi(
         vectorHits: semantic.length,
       },
     }
+  }
+  if (action === "lint") {
+    // Structural findings (orphans, broken links, pages with no outlinks),
+    // computed next to the disk. No LLM involved.
+    const { findings, pages } = await runStructuralLintOnDisk(ctx.vault)
+    const type = params.get("type")
+    const filtered = type ? findings.filter((f) => f.type === type) : findings
+    const counts = findings.reduce<Record<string, number>>((acc, f) => {
+      acc[f.type] = (acc[f.type] ?? 0) + 1
+      return acc
+    }, {})
+    return { status: 200, body: { findings: filtered, pages, counts, total: findings.length } }
+  }
+  if (action === "r2r/status") {
+    const cfg = await r2rConfigFor(ctx.vault)
+    if (!cfg) return { status: 200, body: { enabled: false } }
+    return { status: 200, body: { enabled: true, baseUrl: cfg.baseUrl, ...(await r2rHealth(cfg)) } }
   }
   if (action === "graph") {
     const g = await buildGraph(ctx.vault, params.get("q") ?? undefined, params.get("nodeType") ?? undefined, Math.min(2000, Number(params.get("limit") ?? "500")))

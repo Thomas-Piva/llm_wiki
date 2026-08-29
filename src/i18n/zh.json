@@ -647,7 +647,16 @@
         "legacyPromptTitle": "检测到旧版（按页）索引",
         "legacyPromptBody": "当前项目在旧版按页向量存储里有 {{count}} 条记录。新版按 chunk 索引检索质量更高,但需要一次性重新 embed。点击\"重新索引全部页面\"完成升级。",
         "dropLegacy": "删除旧版索引",
-        "dropLegacyDone": "旧版索引已删除。"
+        "dropLegacyDone": "旧版索引已删除。",
+        "r2r": {
+          "enableLabel": "语义搜索引擎 (R2R)",
+          "enableHint": "由索引整个知识库的 R2R 引擎回答语义搜索，而不是在本应用中逐页计算向量。",
+          "baseUrlLabel": "引擎地址",
+          "check": "检查",
+          "reachable": "可访问",
+          "unreachable": "无法访问",
+          "documents": "个已索引文档"
+        }
       },
       "multimodal": {
         "title": "图片描述",
@@ -682,7 +691,9 @@
         "costPoint1": "每张新图触发一次视觉模型调用（约 500-2000 token，取决于模型和 thinking 模式）。",
         "costPoint2": "Caption 按图片字节 SHA-256 缓存。跨文档重复的 logo / 通用图表模板只调用 ONE 次。",
         "costPoint3": "Rust 端过滤掉小于 100×100 像素的图，并限制每文档最多 500 张 —— 病态 PDF 不会无限放大费用。",
-        "costPoint4": "批量 ingest 推荐用本地视觉模型（LM Studio / Ollama 跑 Qwen2.5-VL）；托管视觉 API 留给少量高价值文档。"
+        "costPoint4": "批量 ingest 推荐用本地视觉模型（LM Studio / Ollama 跑 Qwen2.5-VL）；托管视觉 API 留给少量高价值文档。",
+        "fallbackModel": "备用模型",
+        "fallbackModelHint": "当上面的模型配额用尽、被限流或出错时自动启用。相同的提供商和凭据，不同的模型。留空则改为停止。"
       },
       "webSearch": {
         "title": "外部信息源",
