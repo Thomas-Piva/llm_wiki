@@ -160,6 +160,18 @@ interface EmbeddingConfig {
    * are ignored — they're managed by the embedding client itself.
    */
   extraHeaders?: Record<string, string>
+  /**
+   * Serve semantic search from an R2R engine instead of the built-in vector
+   * table. R2R indexes the whole corpus at ingest time and answers over HTTP,
+   * so nothing above this layer changes: search still returns
+   * `{path, snippet, vectorScore}`. When absent or disabled, the local
+   * embedding + vector table above stays in charge.
+   */
+  r2r?: {
+    enabled: boolean
+    /** e.g. "http://127.0.0.1:7272" — loopback on the machine serving the vault. */
+    baseUrl: string
+  }
 }
 
 /**
@@ -334,7 +346,18 @@ export interface MineruConfig {
   modelVersion: MineruModelVersion
 }
 
-export type MediaTranscribeBackend = "groq" | "custom"
+/**
+ * How recordings become text.
+ *
+ * `groq`   — Whisper on Groq's free tier. Fast and free, but capped at 8 hours
+ *            of audio a day; an archive of recordings hits that wall on day one.
+ * `custom` — any OpenAI-compatible `/audio/transcriptions` endpoint.
+ * `chat`   — a chat model that accepts audio input, called on
+ *            `/chat/completions`. No daily ceiling, and measured on real
+ *            material it costs about half a cent per ten minutes — which makes
+ *            "wait until tomorrow" a choice rather than a constraint.
+ */
+export type MediaTranscribeBackend = "groq" | "custom" | "chat"
 
 export interface MediaIngestConfig {
   /** Audio/video files and links get transcribed via ffmpeg + a transcription API. */
@@ -347,6 +370,8 @@ export interface MediaIngestConfig {
   audioVideoCustomEndpoint: string
   /** Bearer token for the custom endpoint (used when backend === "custom"). */
   audioVideoCustomToken: string
+  /** Chat model with audio input, e.g. "google/gemini-2.5-flash-lite". */
+  audioVideoChatModel?: string
   /** Standalone image files get captioned/OCR'd via the app's configured LLM — no separate provider. */
   imagesEnabled: boolean
 }
@@ -366,6 +391,15 @@ interface MultimodalConfig {
   apiMode?: CustomApiMode
   /** Max parallel caption requests during ingest. >=1. */
   concurrency: number
+  /**
+   * Model to fall back to when the primary stops answering — out of quota,
+   * rate limited, or erroring. Same provider and credentials, different model.
+   *
+   * This is about continuity, not cost: thousands of images behind one stalled
+   * provider is the failure that actually hurts. Empty = no fallback, errors
+   * propagate as before.
+   */
+  fallbackModel?: string
 }
 
 /**

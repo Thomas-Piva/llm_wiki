@@ -38,6 +38,7 @@
  *   on chart-heavy decks.
  */
 import type { LlmConfig } from "@/stores/wiki-store"
+import { useWikiStore } from "@/stores/wiki-store"
 import { streamChat, type ChatMessage } from "./llm-client"
 import { resolveIngestReasoning } from "@/lib/reasoning-capabilities"
 
@@ -186,6 +187,58 @@ export async function captionImage(
     },
   ]
 
+  try {
+    return await runCaption(llmConfig, messages, signal, options)
+  } catch (err) {
+    // A provider that stops answering must not stop the queue. The fallback is
+    // about continuity, not price: at these volumes the difference between
+    // models is cents, but a stalled caption queue holds up thousands of
+    // images. The alternative model is chosen in Settings; without one, the
+    // error propagates as before.
+    const fallback = useWikiStore.getState().multimodalConfig.fallbackModel?.trim()
+    if (isNotAVisionModel(err)) {
+      // Say it once, loudly, naming the model: the per-image 404s scroll past
+      // and the run otherwise looks successful.
+      console.error(
+        `[caption] IL MODELLO "${llmConfig.model}" NON ACCETTA IMMAGINI — ` +
+          `nessuna didascalia verrà prodotta finché non viene cambiato in Impostazioni → Immagini.`,
+      )
+    }
+    if (!fallback || !(isRetryableProviderError(err) || isNotAVisionModel(err)) || fallback === llmConfig.model) throw err
+    console.warn(`[caption] "${llmConfig.model}" non utilizzabile — riprovo con "${fallback}"`)
+    return runCaption({ ...llmConfig, model: fallback }, messages, signal, options)
+  }
+}
+
+/**
+ * The model cannot accept images at all — a configuration mistake, not a hiccup.
+ *
+ * This one deserves its own name because of how it fails: every single caption
+ * returns 404, the ingest logs `failed=18` and marks the document done anyway,
+ * and the archive fills with figures nobody described. It cost a real vault
+ * 1,542 undescribed images over one night before anyone noticed. Retrying it
+ * elsewhere is right; letting it pass quietly is not.
+ */
+export function isNotAVisionModel(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err)
+  return /no endpoints found that support image input|does not support image|vision.*not supported/i.test(message)
+}
+
+/** Out of quota / provider trouble — worth another model. A bad image is not. */
+export function isRetryableProviderError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err)
+  return (
+    /\b(429|402|5\d\d)\b/.test(message) ||
+    /rate.?limit|quota|too many requests|insufficient|capacity|overloaded|timeout/i.test(message)
+  )
+}
+
+async function runCaption(
+  llmConfig: LlmConfig,
+  messages: ChatMessage[],
+  signal: AbortSignal | undefined,
+  options: CaptionOptions | undefined,
+): Promise<string> {
   const tokens: string[] = []
   let streamError: Error | null = null
 

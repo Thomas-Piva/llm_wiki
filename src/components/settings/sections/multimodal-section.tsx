@@ -295,6 +295,23 @@ export function MultimodalSection({ draft, setDraft }: Props) {
             </p>
           </div>
 
+          {/* A provider that stops answering stalls thousands of images. The
+              fallback is about keeping the queue moving, not about price. */}
+          <div className="space-y-2 rounded-md border p-3">
+            <Label>{t("settings.sections.multimodal.fallbackModel", "Fallback model")}</Label>
+            <Input
+              value={draft.multimodalFallbackModel}
+              placeholder="qwen/qwen3.7-flash"
+              onChange={(e) => setDraft("multimodalFallbackModel", e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              {t(
+                "settings.sections.multimodal.fallbackModelHint",
+                "Used automatically when the model above is out of quota, rate limited or failing. Same provider and credentials, different model. Leave empty to stop instead.",
+              )}
+            </p>
+          </div>
+
           {/* Cost guardrail panel — mostly informational for now. */}
           <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
             <div className="text-sm font-medium text-amber-700 dark:text-amber-400">

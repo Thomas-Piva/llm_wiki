@@ -16,6 +16,7 @@ import {
 } from "@/lib/embedding"
 import { testEmbeddingConnection, testEmbeddingFunction, type ProviderTestResult } from "@/lib/connection-tests"
 import type { SettingsDraft, DraftSetter } from "../settings-types"
+import { R2RPanel } from "./r2r-panel"
 
 interface Props {
   draft: SettingsDraft
@@ -177,6 +178,8 @@ export function EmbeddingSection({ draft, setDraft }: Props) {
           {t("settings.sections.embedding.description")}
         </p>
       </div>
+
+      <R2RPanel draft={draft} setDraft={setDraft} />
 
       <div className="flex items-center justify-between rounded-md border p-3">
         <div>
