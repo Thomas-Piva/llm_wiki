@@ -50,3 +50,6 @@ pnpm-debug.log*
 .superpowers/
 .claude/
 tools/headless-ingest/CONTEXT.md
+
+# Runtime state of a vault opened for local testing — never source.
+.llm-wiki/
