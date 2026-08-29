@@ -6,7 +6,7 @@
  *   bun --preload ./tools/headless-ingest/preload.ts \
  *     ./tools/headless-ingest/run.ts \
  *     --project /home/claude/claudewiki --scan --delete-after \
- *     --concurrency 1 --max-size 12M
+ *     --concurrency 1 [--llm-concurrency 16] --max-size 12M [--fast]
  *
  * Modes:
  *   (default)  one pass: [--scan] then drain the queue, then exit.
@@ -43,20 +43,28 @@ async function main() {
 
   const { llmConfig } = loadHeadlessConfig({ appStatePath: flag("--config") })
   const concurrency = Number(flag("--concurrency") ?? "1")
+  // Classic mode waits on a remote model rather than the CPU, so it can run
+  // far wider than the local pipeline without touching the cores.
+  const llmConcurrency = Number(flag("--llm-concurrency") ?? String(concurrency))
   const maxSize = parseSize(flag("--max-size"))
   const deleteAfter = has("--delete-after")
+  // No page written by a model: extract, store, index. See AutoIngestOptions.fast.
+  const fast = has("--fast")
+  // Prova D: una chiamata invece di due. Ignorato in modalità veloce, che di
+  // chiamate non ne fa nessuna.
+  const singleCall = has("--single-call")
   const doScan = has("--scan")
 
   console.error(
     `[run] project=${project} provider=${llmConfig.provider} model=${llmConfig.model} ` +
-      `concurrency=${concurrency}${maxSize ? ` max-size=${maxSize}B` : ""}` +
-      `${deleteAfter ? " delete-after" : ""}${doScan ? " scan" : ""}`,
+      `concurrency=${concurrency}${fast ? "" : ` llm-concurrency=${llmConcurrency}`}${maxSize ? ` max-size=${maxSize}B` : ""}` +
+      `${deleteAfter ? " delete-after" : ""}${fast ? " FAST(no-llm)" : singleCall ? " UNA-CHIAMATA" : ""}${doScan ? " scan" : ""}`,
   )
 
   const cycle = async () => {
     if (doScan) await enqueueSources(project)
     const t0 = Date.now()
-    const report = await runQueueOnce({ project, llmConfig, concurrency, maxSize, deleteAfter })
+    const report = await runQueueOnce({ project, llmConfig, concurrency, llmConcurrency, maxSize, deleteAfter, fast, singleCall })
     console.error(`[run] cycle in ${Date.now() - t0}ms:`, report)
     return report
   }

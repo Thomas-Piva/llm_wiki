@@ -10,6 +10,7 @@ import {
   writeFile,
   listDirectory,
 } from "@/commands/fs"
+import { invoke } from "@tauri-apps/api/core"
 import { AUDIO_VIDEO_SOURCE_EXTENSIONS, IMAGE_SOURCE_EXTENSIONS } from "@/lib/media-extensions"
 import { transcribeAudio } from "@/lib/media-transcribe"
 import { captionImage } from "@/lib/vision-caption"
@@ -563,6 +564,33 @@ export interface AutoIngestOptions {
    * the project mutex; autoIngest always acquires it inside this callback.
    */
   runCommit?: IngestCommitRunner
+  /**
+   * Skip the two LLM passes (analysis, then page generation) and write the
+   * extracted text straight to the source page.
+   *
+   * Those passes exist to turn a source into readable wiki prose, and they cost
+   * 2-4 model calls per document — the reason a large archive takes weeks. They
+   * were also the only way to FIND anything, because search was keyword-only:
+   * an un-rewritten document was effectively invisible.
+   *
+   * With a semantic index over the extracted text that stops being true, so the
+   * written page becomes something to ask for per document rather than pay for
+   * on all of them. Everything before the LLM — MinerU, transcription, image
+   * extraction and captioning — runs exactly as before.
+   */
+  fast?: boolean
+  /**
+   * Una chiamata sola invece di due: si salta il passo di Analisi e si chiede
+   * direttamente le pagine.
+   *
+   * L'Analisi separata esiste per una ragione difendibile — dà al modello un
+   * momento per ragionare prima di scrivere — ma costa una chiamata piena, con
+   * l'intera fonte nel contesto, per ogni documento. Se la qualità regge, il
+   * costo e la latenza si dimezzano.
+   *
+   * È un compromesso da misurare, non da assumere: qui c'è solo l'interruttore.
+   */
+  singleCall?: boolean
 }
 
 export async function autoIngest(
@@ -681,7 +709,43 @@ async function autoIngestImpl(
   let mineruSucceeded = false
   let mineruSavedImages: SavedImage[] = []
   const mineruConfigured = mineruCfg.backend === "local" || Boolean(mineruCfg.token)
-  if (isPdf && mineruCfg.enabled && mineruConfigured) {
+
+  // ── Free path first: does this PDF already contain its text? ──
+  // A digital PDF carries its words; extracting them is a copy, not an
+  // interpretation, and it runs locally in milliseconds. Only a scan — a
+  // photograph of a page — has nothing to copy, and that is what MinerU is
+  // for. Trying the cheap read first turns "every PDF goes to the cloud" into
+  // "only the scans do".
+  //
+  // The desktop has no such command and throws, which lands on today's
+  // behaviour: straight to MinerU.
+  let localPdfText = ""
+  if (isPdf) {
+    try {
+      const raw = await invoke<string>("pdf_extract_text", { path: sp })
+      const useful = typeof raw === "string" ? raw.replace(/\s/g, "").length : 0
+      if (useful >= 20) {
+        // Log the decision before writing anything: an exception in the cache
+        // write used to leave no trace at all, and the run looked as if this
+        // branch had never existed.
+        console.log(`[ingest:pdftotext] "${fileName}": ${raw.length} caratteri in locale, MinerU non richiesto`)
+        localPdfText = raw
+        const cacheDir = sp.substring(0, sp.lastIndexOf("/"))
+        await createDirectory(`${cacheDir}/.cache`)
+        await writeFile(`${cacheDir}/.cache/${fileName}.txt`, raw)
+      } else {
+        console.log(`[ingest:pdftotext] "${fileName}": nessun testo — è una scansione, passo a MinerU`)
+      }
+    } catch (err) {
+      // On the desktop the command does not exist and this is the expected
+      // path to MinerU. Anywhere else it means the free extraction broke, and
+      // silence would hide a document going to a paid parser for no reason.
+      localPdfText = ""
+      console.warn(`[ingest:pdftotext] "${fileName}" non estratto localmente: ${err instanceof Error ? err.message : err}`)
+    }
+  }
+
+  if (isPdf && !localPdfText && mineruCfg.enabled && mineruConfigured) {
     try {
       const cacheDir = sp.substring(0, sp.lastIndexOf("/"))
       const cachePath = `${cacheDir}/.cache/${fileName}.txt`
@@ -1055,6 +1119,65 @@ async function autoIngestImpl(
     }
   }
 
+  // ── Fast mode: stop here ──────────────────────────────────────
+  // Everything expensive that follows (long-source map-reduce, analysis,
+  // generation) is the LLM turning this text into prose. In fast mode we keep
+  // the text itself: it is already extracted, already carries its image
+  // references, and the semantic index makes it findable without rewriting.
+  if (options?.fast) {
+    // Guard the one thing the removed LLM used to do for free: reject garbage.
+    // When extraction silently fails (a transcript that never arrived, an
+    // unsupported container), reading the source returns its raw bytes. The
+    // model turned that into a short useless page; writing it verbatim produced
+    // a 37 MB file of binary. Fail the task instead — it stays in the queue and
+    // retries once the transcript or parser is available.
+    if (looksBinary(enrichedSourceContent)) {
+      // A recording whose transcript never arrived is unfinished, not broken:
+      // the transcription step swallows its own 429 and hands back the raw
+      // bytes, so this guard is where a spent daily allowance actually shows
+      // up. Marking it failed would bury the file — nothing retries a failure.
+      const isMedia = /\.(mp3|m4a|wav|ogg|flac|aac|wma|mp4|mov|mkv|avi|webm|m4v)$/i.test(fileName)
+      throw new Error(
+        isMedia
+          ? `${TRANSCRIPT_MISSING}: "${fileName}" non ha ancora una trascrizione (quota o servizio non disponibile).`
+          : `Estrazione non riuscita per "${fileName}": il contenuto non è testo (nessun parser disponibile).`,
+      )
+    }
+    const date = new Date().toISOString().slice(0, 10)
+    const fastPath = `${pp}/${sourceSummaryPath}`
+    await writeFile(fastPath, buildFastSourceSummary(sourceIdentity, enrichedSourceContent, date, folderContext))
+    const written = [sourceSummaryPath]
+    onFileWritten?.(sourceSummaryPath)
+
+    // The safety-net section exists because a model writing the page might drop
+    // the images. In fast mode no model writes anything: the text already
+    // carries every reference, captions included. Appending them again produced
+    // a second, caption-less copy of every figure — 23 described images plus 23
+    // bare duplicates on the same page. So only add the section for images the
+    // text does not already mention.
+    const missing = savedImages.filter((img) => !enrichedSourceContent.includes(img.relPath.split("/").pop()!))
+    if (useWikiStore.getState().multimodalConfig.enabled && missing.length > 0 && !signal?.aborted) {
+      try {
+        await injectImagesIntoSourceSummary(pp, sourceIdentity, sourceSummarySlug, missing)
+      } catch {
+        /* the page is written either way */
+      }
+    }
+
+    await saveIngestCache(pp, sourceIdentity, sourceContent, written)
+    try {
+      await refreshProjectFileTree(pp, { bumpDataVersion: true })
+    } catch {
+      /* cosmetic */
+    }
+    activity.updateItem(activityId, {
+      status: "done",
+      detail: `Indicizzato senza LLM — ${sourceSummaryPath}`,
+      filesWritten: written,
+    })
+    return written
+  }
+
   const stableContextLength = schema.length + purpose.length + index.length + overview.length
   const sourceBudget = computeIngestSourceBudget(llmConfig.maxContextSize, stableContextLength)
   let sourceContext = enrichedSourceContent
@@ -1090,7 +1213,11 @@ async function autoIngestImpl(
 
   let analysis = precomputedAnalysis
 
-  if (!analysis) {
+  // Prova D: saltare l'Analisi. Il modello riceve la fonte e produce
+  // direttamente le pagine, ragionando internamente invece che in un giro
+  // separato. Dimezza chiamate e latenza; se la qualità cali si vede col
+  // giudice sullo schema.
+  if (!analysis && !options?.singleCall) {
     await streamChat(
       llmConfig,
       [
@@ -1132,14 +1259,25 @@ async function autoIngestImpl(
         content: [
           `Source document to process: **${sourceIdentity}**`,
           "",
-          "The Stage 1 analysis below is CONTEXT to inform your output. Do NOT echo",
-          "its tables, bullet points, or prose. Your output must be FILE/REVIEW",
-          "blocks as specified in the system prompt — nothing else.",
-          "",
-          "## Stage 1 Analysis (context only — do not repeat)",
-          "",
-          analysis,
-          "",
+          ...(analysis
+            ? [
+                "The Stage 1 analysis below is CONTEXT to inform your output. Do NOT echo",
+                "its tables, bullet points, or prose. Your output must be FILE/REVIEW",
+                "blocks as specified in the system prompt — nothing else.",
+                "",
+                "## Stage 1 Analysis (context only — do not repeat)",
+                "",
+                analysis,
+                "",
+              ]
+            : [
+                // Senza il giro di Analisi il modello deve fare da sé quel lavoro:
+                // glielo si chiede esplicitamente, ma internamente — l'output
+                // resta solo blocchi FILE/REVIEW.
+                "Work out the entities, concepts and connections yourself before writing,",
+                "but keep that reasoning internal: output only FILE/REVIEW blocks.",
+                "",
+              ]),
           "## Source Context",
           "",
           sourceContext,
@@ -1868,6 +2006,66 @@ export function currentWikiDate(now: Date = new Date()): string {
   return `${year}-${month}-${day}`
 }
 
+/**
+ * The page fast mode writes: frontmatter the vault's schema recognises, plus
+ * the extracted text as-is.
+ *
+ * `sources:` keeps the original's path — that is the thread back to the file on
+ * the archive, which never comes onto this disk.
+ */
+/**
+ * True when a "text" extraction actually returned file bytes.
+ *
+ * A NUL byte settles it outright — no text format contains one. Otherwise judge
+ * by how much of a sample is unprintable: real text, in any language, stays far
+ * below this; compressed audio and images are full of control bytes.
+ */
+/** Marker for "come back when the transcript exists" — see the fast-mode guard. */
+export const TRANSCRIPT_MISSING = "TRASCRIZIONE_ASSENTE"
+
+export function looksBinary(content: string): boolean {
+  if (!content) return false
+  const sample = content.slice(0, 4000)
+  if (sample.includes("\u0000")) return true
+  let odd = 0
+  for (const ch of sample) {
+    const c = ch.codePointAt(0)!
+    // control characters other than tab / newline / carriage return
+    if (c < 32 && c !== 9 && c !== 10 && c !== 13) odd++
+    else if (c === 0xfffd) odd++ // replacement char: decoding already failed
+  }
+  return odd / sample.length > 0.05
+}
+
+export function buildFastSourceSummary(
+  sourceIdentity: string,
+  content: string,
+  date: string,
+  folderContext?: string,
+): string {
+  return [
+    "---",
+    "type: source",
+    `title: "Source: ${sourceIdentity}"`,
+    `created: ${date}`,
+    `updated: ${date}`,
+    `sources: ["${sourceIdentity}"]`,
+    "tags: []",
+    "related: []",
+    // Not rewritten by a model, so nothing here is a claim the vault should
+    // treat as established.
+    "status: speculative",
+    "confidence: low",
+    ...(folderContext ? [`folder: "${folderContext}"`] : []),
+    "---",
+    "",
+    `# Source: ${sourceIdentity}`,
+    "",
+    content.trim(),
+    "",
+  ].join("\n")
+}
+
 export function buildFallbackSourceSummary(
   sourceIdentity: string,
   analysis: string,
@@ -2210,11 +2408,21 @@ export function buildAnalysisPrompt(
   sourceContent: string = "",
   schema: string = "",
 ): string {
+  // ORDINE: prima tutto ciò che NON dipende dal documento, poi ciò che ne
+  // dipende. Non è pignoleria di stile — è ciò che rende il prefisso
+  // riutilizzabile dal fornitore.
+  //
+  // I fornitori scontano il prefisso ripetuto (Anthropic e Gemini 90%,
+  // OpenAI 50-75%) confrontando i prompt carattere per carattere DALL'INIZIO:
+  // la prima differenza chiude il discorso. `languageRule(sourceContent)` stava
+  // alla quarta riga, quindi le ~27.000 battute che seguivano venivano
+  // ripagate per intero a ogni documento, 8.800 volte.
+  //
+  // La regola sulla lingua funziona identica in fondo: dice in che lingua
+  // scrivere, non serve che venga letta prima delle istruzioni.
   return [
     "You are an expert research analyst. Read the source document and produce a structured analysis.",
     "Do not output chain-of-thought, hidden reasoning, or a thinking transcript. Reason internally and write only the concise final analysis.",
-    "",
-    languageRule(sourceContent),
     "",
     "Your analysis should cover:",
     "",
@@ -2259,6 +2467,9 @@ export function buildAnalysisPrompt(
       : "",
     purpose ? `## Wiki Purpose (for context)\n${purpose}` : "",
     index ? `## Current Wiki Index (for checking existing content)\n${index}` : "",
+    // ── da qui in poi dipende dal documento: fine del prefisso riutilizzabile ──
+    "",
+    languageRule(sourceContent),
   ].filter(Boolean).join("\n")
 }
 
@@ -2279,15 +2490,17 @@ export function buildGenerationPrompt(
   const summaryPath = sourceSummaryPath ?? `wiki/sources/${sourceBaseName}.md`
   const today = currentWikiDate()
 
+  // ORDINE: lo stabile davanti, il variabile in coda — vedi la nota estesa in
+  // buildAnalysisPrompt. Qui il blocco "Source File" e la regola sulla lingua
+  // stavano in testa e rompevano il prefisso al 256° carattere su 15.789: l'1,6%.
+  // Spostati in fondo, dicono la stessa cosa e lasciano in cache tutto lo schema.
+  //
+  // `today` invece resta dov'è di proposito: cambia una volta al giorno, non da
+  // un documento all'altro, quindi dentro una corsa di ingest è costante e non
+  // invalida niente.
   return [
     "You are a wiki maintainer. Based on the analysis provided, generate wiki files.",
     "Do not output chain-of-thought, hidden reasoning, or explanatory preamble. Reason internally and output only the requested FILE/REVIEW blocks.",
-    "",
-    languageRule(sourceContent),
-    "",
-    `## IMPORTANT: Source File`,
-    `The original source file is: **${sourceFileName}**`,
-    `All wiki pages generated from this source MUST include this filename in their frontmatter \`sources\` field.`,
     `Today's date is **${today}**. Use this exact date for all new \`created\`, \`updated\`, and wiki/log.md ingest dates.`,
     "",
     schema
@@ -2301,6 +2514,13 @@ export function buildGenerationPrompt(
           "Every generated page's frontmatter type must match the schema directory used in its FILE path.",
         ].join("\n")
       : "",
+    // ── da qui in poi dipende dal documento: fine del prefisso riutilizzabile ──
+    "",
+    `## IMPORTANT: Source File`,
+    `The original source file is: **${sourceFileName}**`,
+    `All wiki pages generated from this source MUST include this filename in their frontmatter \`sources\` field.`,
+    "",
+    languageRule(sourceContent),
     "",
     "## What to generate",
     "",
