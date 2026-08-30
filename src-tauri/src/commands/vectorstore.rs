@@ -5,8 +5,11 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema};
 use chrono::Duration;
 use lancedb::connect;
+use lancedb::index::vector::IvfHnswSqIndexBuilder;
+use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::{CompactionOptions, OptimizeAction};
+use lancedb::DistanceType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -840,9 +843,80 @@ pub async fn vector_optimize_chunks(project_path: String) -> Result<(), String> 
             .await
             .map_err(|e| format!("Prune old chunk versions error: {e}"))?;
 
+        // Build the approximate index once the table is big enough to need one.
+        //
+        // Compaction first, on purpose: `create_index` works over fragments, so
+        // building before they are merged does the work twice.
+        //
+        // A missing index makes search slow, never wrong — so a failure here is
+        // logged and swallowed rather than failing a run that has already
+        // written its data.
+        if let Err(e) = ensure_vector_index(&table).await {
+            eprintln!("[vectorstore] ANN index not created: {e}");
+        }
+
         Ok(())
     })
     .await
+}
+
+/// Below this the exact scan is not worth replacing.
+///
+/// Measured on the production corpus: 248,083 chunks searched exhaustively in
+/// **94.9 ms**, i.e. ~0.4 ms per thousand rows. At fifty thousand the scan is
+/// under 20 ms — imperceptible, and with no index to build or maintain. Above
+/// it, the bake-off numbers apply: **94.9 ms → 4.3 ms at 99.7% recall@5**.
+///
+/// The floor cannot be low: IVF trains its centroids from a sample, so on few
+/// rows it yields an index worse than the scan it replaces.
+const ANN_MIN_ROWS: usize = 50_000;
+
+/// Create the vector index when the table crosses `ANN_MIN_ROWS`, once.
+///
+/// This was missing on both sides, and it is why the project's best measurement
+/// never reached anyone: the `IVF_HNSW_SQ` running in production was built by
+/// hand with a Python script. Neither this file nor its TypeScript twin had ever
+/// called `create_index`, so every installed copy fell back to an exact scan.
+///
+/// It only has to happen once. From then on `optimize` — which the caller just
+/// ran — folds new rows into the existing index by itself.
+///
+/// `Cosine` is not a preference: it is the metric the production index was
+/// tuned and measured with. The builder defaults to L2, so it must be set.
+async fn ensure_vector_index(table: &lancedb::Table) -> Result<(), String> {
+    let indices = table
+        .list_indices()
+        .await
+        .map_err(|e| format!("List indices error: {e}"))?;
+    if indices.iter().any(|i| i.columns.iter().any(|c| c == "vector")) {
+        return Ok(());
+    }
+
+    let rows = table
+        .count_rows(None)
+        .await
+        .map_err(|e| format!("Count rows error: {e}"))?;
+    if rows < ANN_MIN_ROWS {
+        return Ok(());
+    }
+
+    // Building monopolises the cores for a while. Say so: on a small machine the
+    // user sees the fans spin up and deserves to know what for.
+    eprintln!("[vectorstore] building ANN index over {rows} rows — once, may take minutes");
+    let started = std::time::Instant::now();
+    table
+        .create_index(
+            &["vector"],
+            Index::IvfHnswSq(IvfHnswSqIndexBuilder::default().distance_type(DistanceType::Cosine)),
+        )
+        .execute()
+        .await
+        .map_err(|e| format!("Create index error: {e}"))?;
+    eprintln!(
+        "[vectorstore] ANN index ready in {:.0}s",
+        started.elapsed().as_secs_f64()
+    );
+    Ok(())
 }
 
 /// Report whether the legacy per-page v1 table exists with any rows —

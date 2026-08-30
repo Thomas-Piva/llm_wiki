@@ -194,10 +194,12 @@ export function vectorDeletePage(vault: string, pageId: string): Promise<void> {
  * Not called per page on purpose: compaction rewrites data, so doing it every
  * time would trade one quadratic cost for another.
  */
-export async function vectorCompact(vault: string): Promise<{ fileRimossi: number } | null> {
+export async function vectorCompact(
+  vault: string,
+): Promise<{ fileRimossi: number; indice: EsitoIndice | "fallito" } | null> {
   const tbl = await openTable(vault)
   if (!tbl) return null
-  return serialize(vault, async () => {
+  const esito = await serialize(vault, async () => {
     // `cleanupOlderThan` è la parte che conta, e senza di essa la chiamata non
     // fa nulla: il peso non sta nei dati ma nello **storico delle versioni**.
     // Misurato su un riempimento reale a metà strada — 6.200 pagine, 17.737
@@ -213,6 +215,82 @@ export async function vectorCompact(vault: string): Promise<{ fileRimossi: numbe
     // nostri hanno minuti. Con la pulizia: **3,31 GB → 0,03 GB, 31.004 file → 4**.
     const stats = await tbl.optimize({ cleanupOlderThan: new Date(), deleteUnverified: true })
     return { fileRimossi: stats?.prune?.oldVersionsRemoved ?? 0 }
+  })
+  // Dopo la compattazione, non prima: `createIndex` lavora sui frammenti, e
+  // farlo su quelli non ancora uniti significa costruire l'indice due volte.
+  // Fuori da `serialize` perché `ensureVectorIndex` prende il suo turno da sé.
+  const indice = await ensureVectorIndex(vault).catch((err) => {
+    // Un indice mancante rende la ricerca lenta, non rotta: non è una ragione
+    // per far fallire la passata che ha appena scritto i dati.
+    console.warn(`[lancedb] indice non creato: ${err instanceof Error ? err.message : err}`)
+    return "fallito" as const
+  })
+  return { ...esito, indice }
+}
+
+/**
+ * Oltre questa soglia la scansione esatta smette di convenire.
+ *
+ * Misurato sul corpus della cliente: 248.083 pezzi, ricerca esatta **94,9 ms**,
+ * quindi il costo è lineare a circa 0,4 ms ogni mille righe. A cinquantamila la
+ * scansione sta sotto i 20 ms — ancora impercettibile, e senza indice da
+ * costruire né da mantenere. Sopra, la differenza diventa quella misurata nel
+ * bake-off: **94,9 ms → 4,3 ms, con recall@5 al 99,7%**.
+ *
+ * La soglia non può essere bassa: l'IVF addestra i suoi centroidi campionando
+ * (`sample_rate` 256), quindi su poche righe produce un indice peggiore della
+ * scansione che sostituisce.
+ */
+export const SOGLIA_INDICE_ANN_DEFAULT = 50_000
+
+/** Letta a ogni chiamata, non al caricamento: così `LANCEDB_ANN_MIN_ROWS` vale
+ *  anche per un processo già avviato, e i test non devono ricaricare il modulo. */
+export function sogliaIndiceAnn(): number {
+  const v = Number(process.env.LANCEDB_ANN_MIN_ROWS)
+  return Number.isFinite(v) && v >= 0 ? v : SOGLIA_INDICE_ANN_DEFAULT
+}
+
+const NOME_INDICE_VETTORE = "vector_idx"
+
+/**
+ * Crea l'indice approssimato quando la tabella è abbastanza grande, una volta sola.
+ *
+ * ⚠️ Questo pezzo mancava, ed è la ragione per cui il numero migliore del
+ * progetto non arrivava a nessuno: l'`IVF_HNSW_SQ` in produzione l'ha creato
+ * **uno script Python del bake-off, a mano**. Né questo file né il gemello Rust
+ * hanno mai chiamato `createIndex`, quindi chiunque scarichi l'applicazione fa
+ * sempre scansione esatta.
+ *
+ * Si crea una volta e basta: da lì in poi `optimize()` — che `vectorCompact`
+ * chiama a ogni fine passata — aggiunge da sé le righe nuove all'indice
+ * esistente. Verificato sull'indice della cliente: `numUnindexedRows: 0` dopo
+ * ore di scritture.
+ *
+ * `cosine` non è una preferenza: è la metrica con cui l'indice in produzione è
+ * stato tarato e misurato. Cambiarla invaliderebbe il recall del bake-off.
+ */
+export type EsitoIndice = "creato" | "c'era già" | "troppo piccola" | "nessuna tabella"
+
+export async function ensureVectorIndex(vault: string): Promise<EsitoIndice> {
+  const tbl = await openTable(vault)
+  if (!tbl) return "nessuna tabella"
+
+  const indici = await tbl.listIndices()
+  if (indici.some((i) => i.columns.includes("vector"))) return "c'era già"
+
+  const righe = await tbl.countRows()
+  if (righe < sogliaIndiceAnn()) return "troppo piccola"
+
+  return serialize(vault, async () => {
+    const t0 = Date.now()
+    // La costruzione è cara e monopolizza i core: va detto, perché su un box
+    // piccolo l'utente vede la macchina occuparsi e deve sapere di cosa.
+    console.error(`[lancedb] costruisco l'indice su ${righe} righe — una volta sola, può volerci qualche minuto`)
+    await tbl.createIndex("vector", {
+      config: lancedb.Index.hnswSq({ distanceType: "cosine" }),
+    })
+    console.error(`[lancedb] indice pronto in ${((Date.now() - t0) / 1000).toFixed(0)}s`)
+    return "creato" as const
   })
 }
 
