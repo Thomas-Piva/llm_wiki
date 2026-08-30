@@ -8,7 +8,6 @@ import {
 import {
   isAdaptiveAnthropicModel,
   isGeminiThinkingLevelModel,
-  isOpenRouterEndpoint,
   normalizeReasoningForProvider,
 } from "@/lib/reasoning-capabilities"
 

@@ -21,6 +21,9 @@ export interface ChangelogEntry {
   highlights: {
     en: string[]
     zh: string[]
+    /** Il fork spedisce anche italiano e russo; le voci vecchie non li hanno. */
+    it?: string[]
+    ru?: string[]
   }
 }
 

@@ -80,7 +80,11 @@ export function KnowledgeTree() {
         setPages(
           batch
             .filter((b) => !b.path.endsWith("/index.md") && !b.path.endsWith("/log.md"))
-            .map((b) => ({ path: b.path, title: b.label, type: b.type, tags: b.tags ?? [] })),
+            // `sources` è diventato obbligatorio con `92f3cba` (filtro per
+            // fonte). Il percorso web non ce l'ha: vuoto, come fa già l'altro
+            // ramo qui sotto, invece di rendere il campo opzionale e spostare
+            // il problema su chi legge.
+            .map((b) => ({ path: b.path, title: b.label, type: b.type, tags: b.tags ?? [], sources: [] })),
         )
         return
       }
