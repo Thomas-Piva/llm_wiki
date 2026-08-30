@@ -84,7 +84,7 @@ export const VAULT_TOOLS: Tool[] = [
   },
   {
     name: "vault_write_note",
-    description: "Create or overwrite a markdown note's full content at a vault-relative path. Call vault_get_conventions first — the vault enforces a specific frontmatter schema, folder purposes, and minimum outgoing wikilinks per note.",
+    description: "Overwrite an existing note's full content at a vault-relative path. To create a NEW entry about a topic, use vault_create_missing_page instead: it grounds the page in what the vault already contains and links only to pages that exist, while this tool writes exactly what you give it — so any [[link]] you invent here lands as a broken one. Call vault_get_conventions first: the vault enforces a frontmatter schema, folder purposes, and a minimum of outgoing wikilinks.",
     inputSchema: {
       type: "object",
       properties: {
@@ -111,7 +111,7 @@ export const VAULT_TOOLS: Tool[] = [
   {
     name: "vault_create_missing_page",
     description:
-      "Create the page a [[wikilink]] points to when it doesn't exist yet. APPEND-ONLY: if a page with that name already exists anywhere in the vault it is left untouched and the existing path is returned — this tool never overwrites, merges or deletes. The new page gets the vault's frontmatter plus a stable id and an aliases list, so a later merge or rename cannot break inbound links.",
+      "THE way to create a new page in the vault — use this whenever asked to create, add or write an entry about a topic, and for the page a dangling [[wikilink]] points to. Do not hand-write a new page with vault_write_note: this tool first asks the semantic index which existing pages are about this title, so the entry is grounded in what the vault actually holds and its [[links]] point only at pages that exist, instead of being guessed. APPEND-ONLY: if a page with that name already exists anywhere in the vault it is left untouched and the existing path is returned — this tool never overwrites, merges or deletes. The new page gets the vault's frontmatter plus a stable id and an aliases list, so a later merge or rename cannot break inbound links.",
     inputSchema: {
       type: "object",
       properties: {
