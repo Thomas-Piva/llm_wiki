@@ -41,12 +41,21 @@ async function main() {
   const project = flag("--project")
   if (!project) throw new Error("--project <path> is required")
 
-  const { llmConfig } = loadHeadlessConfig({ appStatePath: flag("--config") })
+  const { llmConfig, sourceWatchConfig } = loadHeadlessConfig({
+    appStatePath: flag("--config"),
+    projectPath: project,
+  })
   const concurrency = Number(flag("--concurrency") ?? "1")
   // Classic mode waits on a remote model rather than the CPU, so it can run
   // far wider than the local pipeline without touching the cores.
   const llmConcurrency = Number(flag("--llm-concurrency") ?? String(concurrency))
-  const maxSize = parseSize(flag("--max-size"))
+  // Il tetto è una scelta dell'utente, non del file di servizio: senza il flag
+  // vale quello delle impostazioni (Impostazioni → Sorgenti → dimensione massima).
+  // Cablarlo nell'unità systemd voleva dire che alzarlo nell'app non serviva a
+  // niente, e i file oltre il numero vecchio restavano in coda per sempre: il
+  // servizio li saltava a ogni giro e li lasciava `pending`, quindi la coda
+  // sembrava in lavorazione mentre non avanzava di un documento.
+  const maxSize = parseSize(flag("--max-size")) ?? sourceWatchConfig.maxFileSizeMb * 1024 ** 2
   const deleteAfter = has("--delete-after")
   // No page written by a model: extract, store, index. See AutoIngestOptions.fast.
   const fast = has("--fast")

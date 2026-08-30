@@ -10,10 +10,11 @@
  */
 import { existsSync, readFileSync } from "node:fs"
 import { useWikiStore } from "@/stores/wiki-store"
-import type { LlmConfig } from "@/stores/wiki-store"
+import type { LlmConfig, SourceWatchConfig } from "@/stores/wiki-store"
 import { findLlmPreset } from "@/components/settings/llm-presets"
 import { resolveConfig } from "@/components/settings/preset-resolver"
 import { getTaskLlmConfig } from "@/lib/llm-task-routing"
+import { backfillMediaExtensions, normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 
 /** app-state.json keys that map 1:1 onto wiki-store fields. */
 const HYDRATE_KEYS = [
@@ -40,6 +41,50 @@ const HYDRATE_KEYS = [
 export interface HeadlessConfig {
   llmConfig: LlmConfig
   appState: Record<string, unknown>
+  sourceWatchConfig: SourceWatchConfig
+}
+
+/**
+ * `sourceWatchConfig` ha DUE forme, e sono diverse.
+ *
+ *   su disco (app-state.json)   { "<projectId>": {...}, "default": {...} }
+ *   nello store (wiki-store)    { maxFileSizeMb, includeExtensions, ... }
+ *
+ * `saveSourceWatchConfig` scrive la mappa (project-store.ts), `loadSourceWatchConfig`
+ * la srotola prima di darla alla UI. L'idratazione headless copiava invece la
+ * chiave così com'era, quindi nello store finiva la **mappa** dentro un campo
+ * tipizzato come oggetto: ogni `sourceWatchConfig.maxFileSizeMb` letto headless
+ * valeva `undefined` e ricadeva sul default, silenziosamente — il tipo diceva
+ * che andava tutto bene.
+ *
+ * Qui si fa quello che fa `loadSourceWatchConfig`: risolvi per progetto, poi
+ * `default`, poi i valori di fabbrica.
+ */
+export function resolveSourceWatchConfig(
+  appState: Record<string, unknown>,
+  projectPath?: string,
+): SourceWatchConfig {
+  const mappa = appState.sourceWatchConfig as Record<string, unknown> | undefined
+  if (!mappa || typeof mappa !== "object") return normalizeSourceWatchConfig(undefined)
+
+  // già srotolata (un app-state scritto da una versione che salvava piatto)
+  if ("maxFileSizeMb" in mappa || "includeExtensions" in mappa) {
+    return normalizeSourceWatchConfig(backfillMediaExtensions(mappa as Partial<SourceWatchConfig>))
+  }
+
+  const registro = (appState.projectRegistry ?? {}) as Record<string, { path?: string }>
+  const id = projectPath
+    ? Object.keys(registro).find((k) => normalizza(registro[k]?.path) === normalizza(projectPath))
+    : undefined
+
+  const voce = (id ? mappa[id] : undefined) ?? mappa.default
+  if (!voce || typeof voce !== "object") return normalizeSourceWatchConfig(undefined)
+  return normalizeSourceWatchConfig(backfillMediaExtensions(voce as Partial<SourceWatchConfig>))
+}
+
+/** Confronto di percorsi tollerante alla barra finale e ai separatori Windows. */
+function normalizza(p: string | undefined): string {
+  return (p ?? "").replace(/\\/g, "/").replace(/\/+$/, "")
 }
 
 function applyEnvOverrides(cfg: LlmConfig): LlmConfig {
@@ -58,7 +103,7 @@ function applyEnvOverrides(cfg: LlmConfig): LlmConfig {
  * resolve the effective llmConfig and return it. Immutable: never mutates the
  * loaded JSON.
  */
-export function loadHeadlessConfig(opts: { appStatePath?: string }): HeadlessConfig {
+export function loadHeadlessConfig(opts: { appStatePath?: string; projectPath?: string }): HeadlessConfig {
   let appState: Record<string, unknown> = {}
   if (opts.appStatePath) {
     if (!existsSync(opts.appStatePath)) {
@@ -74,6 +119,9 @@ export function loadHeadlessConfig(opts: { appStatePath?: string }): HeadlessCon
     // `mineruConfig.backend` would throw on null.
     if (k in appState && appState[k] != null) patch[k] = appState[k]
   }
+  // la mappa per progetto non è la forma che lo store dichiara: si srotola qui
+  const sourceWatchConfig = resolveSourceWatchConfig(appState, opts.projectPath)
+  patch.sourceWatchConfig = sourceWatchConfig
   if (Object.keys(patch).length > 0) {
     useWikiStore.setState(patch as never)
   }
@@ -100,5 +148,5 @@ export function loadHeadlessConfig(opts: { appStatePath?: string }): HeadlessCon
   const llmConfig = applyEnvOverrides(getTaskLlmConfig("ingest"))
   useWikiStore.setState({ llmConfig } as never)
 
-  return { llmConfig, appState }
+  return { llmConfig, appState, sourceWatchConfig }
 }
