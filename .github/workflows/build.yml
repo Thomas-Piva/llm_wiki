@@ -236,3 +236,75 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ github.ref_name }}" dist-extension/*.zip --clobber
+
+  sign:
+    name: Sign release artifacts
+    needs: [build, package-extension]
+    # Solo sui tag: una build manuale non produce una release da firmare.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # Serve a cosign per farsi dare un token OIDC da GitHub. È il perno della
+      # firma **senza chiavi**: nessun segreto da conservare, da ruotare o da
+      # perdere. L'identità firmataria è questo workflow, in questo repo, su
+      # questo tag — e resta verificabile da chiunque nel registro pubblico di
+      # trasparenza.
+      id-token: write
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Download every asset attached to the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p artifacts
+          gh release download "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" --dir artifacts --clobber
+          ls -la artifacts
+
+      - name: Checksums
+        working-directory: artifacts
+        run: |
+          # Un solo file di riscontri: chi scarica un binario può verificarlo
+          # senza scaricare gli altri undici.
+          sha256sum * > "SHA256SUMS-${{ github.ref_name }}.txt"
+          cat "SHA256SUMS-${{ github.ref_name }}.txt"
+
+      - name: Sign each artifact
+        working-directory: artifacts
+        run: |
+          set -euo pipefail
+          for f in *; do
+            case "$f" in *.sig|*.pem|SHA256SUMS-*) continue ;; esac
+            echo "firmo $f"
+            # `--yes` accetta la registrazione nel log di trasparenza senza
+            # chiedere: in CI non c'è nessuno che risponda.
+            cosign sign-blob --yes \
+              --output-signature "$f.sig" \
+              --output-certificate "$f.pem" \
+              "$f"
+          done
+          ls -la
+
+      - name: Attach signatures and checksums to the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            artifacts/*.sig artifacts/*.pem artifacts/SHA256SUMS-*.txt \
+            --repo "${{ github.repository }}" --clobber
+
+      - name: How to verify
+        run: |
+          cat <<'NOTE'
+          Per verificare un binario scaricato (nessuna chiave da procurarsi):
+
+            cosign verify-blob \
+              --certificate      LLM.Wiki_x.y.z_amd64.deb.pem \
+              --signature        LLM.Wiki_x.y.z_amd64.deb.sig \
+              --certificate-identity-regexp 'https://github.com/Thomas-Piva/llm_wiki/.*' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              LLM.Wiki_x.y.z_amd64.deb
+          NOTE
