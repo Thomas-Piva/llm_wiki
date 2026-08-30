@@ -19,6 +19,7 @@
 import { promises as fs } from "node:fs"
 import { createHash } from "node:crypto"
 import { resolve, dirname, extname, join, relative, sep, basename } from "node:path"
+import { isStructuredText, structuredToText } from "@/lib/structured-text"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { ricercaIbrida, rgSearch, titleFrom } from "./vault-api"
@@ -251,7 +252,12 @@ export async function dispatchInvoke(cmd: string, args: any, vault: string): Pro
         const [cs, os] = await Promise.all([fs.stat(cache), fs.stat(p)])
         if (cs.mtimeMs >= os.mtimeMs) return fs.readFile(cache, "utf8")
       } catch { /* no fresh cache */ }
-      return fs.readFile(p, "utf8")
+      const grezzo = await fs.readFile(p, "utf8")
+      // Stessa regola dell'altra shim: json/xml/yaml/html diventano il testo che
+      // contengono, non la loro sintassi. Applicarla a una strada sola vorrebbe
+      // dire che il sito e l'ingest indicizzano lo stesso file in modo diverso.
+      const ext = extname(p).toLowerCase().replace(/^\./, "")
+      return isStructuredText(ext) ? structuredToText(grezzo, ext) : grezzo
     }
     /**
      * Pull the text a PDF already contains, locally.

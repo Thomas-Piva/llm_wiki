@@ -15,6 +15,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import { dirname, join, basename, extname } from "node:path"
 import { tmpdir } from "node:os"
 import { emitEvent } from "./tauri-event-bus"
+import { isStructuredText, structuredToText } from "@/lib/structured-text"
 import { appendOnlyEnabled, ensureIdentity, isWikiPage, nuovoIdPagina } from "./note-policy"
 import {
   embedTexts,
@@ -216,7 +217,14 @@ export async function invoke<T = unknown>(cmd: string, args: any = {}): Promise<
           console.warn(`[anydoc] ${basename(src)} failed, reading raw: ${String(e).slice(0, 140)}`)
         }
       }
-      return (await fs.readFile(src, "utf8")) as T
+      const grezzo = await fs.readFile(src, "utf8")
+      // json/xml/yaml/html erano accettati come sorgenti ma non parsati: finivano
+      // nell'indice con la loro sintassi, e per una pagina HTML questo significa
+      // indicizzare `<div class="wrapper">` invece di ciò che la pagina dice.
+      // Non si mette in cache: la conversione costa microsecondi e un file in
+      // cache in più e' un file in piu' da invalidare.
+      if (isStructuredText(ext)) return structuredToText(grezzo, ext) as T
+      return grezzo as T
     }
 
     case "read_file_as_base64": {
