@@ -3,6 +3,7 @@ import path from "node:path"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js"
 import { readNote, listNotes, writeNote, appendNote, searchNotes, VaultError } from "./vault-fs.js"
+import { buildGraph, createMissingPage, formatGraph } from "./vault-graph.js"
 
 // Filenames checked, in order, for the vault's usage rules — the actual
 // content an agent needs before writing (frontmatter schema, folder
@@ -87,6 +88,38 @@ export const VAULT_TOOLS: Tool[] = [
     },
   },
   {
+    name: "vault_graph",
+    description:
+      "Read the vault's [[wikilink]] graph straight from disk: every page with its REAL vault-relative path, its outgoing links, the links that point at nothing, and the pages nobody cites. Call this before writing a [[link]] — it tells you the exact page id to use instead of guessing a path, and lists the missing targets you may want to create with vault_create_missing_page.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        folder: { type: "string", description: "Restrict to a vault-relative folder, e.g. concepts" },
+        limit: { type: "number", description: "Max rows per section, default 200" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vault_create_missing_page",
+    description:
+      "Create the page a [[wikilink]] points to when it doesn't exist yet. APPEND-ONLY: if a page with that name already exists anywhere in the vault it is left untouched and the existing path is returned — this tool never overwrites, merges or deletes. The new page gets the vault's frontmatter plus a stable id and an aliases list, so a later merge or rename cannot break inbound links.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Human title, e.g. Metamedicina. The filename is derived in kebab-case." },
+        folder: { type: "string", description: "Target folder, default concepts" },
+        summary: { type: "string", description: "One-line summary for the frontmatter" },
+        body: { type: "string", description: "Markdown body. Omit for a stub placeholder." },
+        aliases: { type: "array", items: { type: "string" }, description: "Alternative names that must keep resolving to this page" },
+        related: { type: "array", items: { type: "string" }, description: "Page ids to link out to (anti-orphan rule)" },
+        visibility: { type: "string", description: "Visibility label the search pre-filters on. Default: all" },
+      },
+      required: ["title"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "vault_append_note",
     description: "Append text to the end of a markdown note, creating it if it doesn't exist. Call vault_get_conventions first if the note doesn't exist yet — new notes still need the vault's frontmatter schema.",
     inputSchema: {
@@ -152,6 +185,28 @@ export async function callVaultTool(name: string, args: Record<string, unknown>,
         const matches = await searchNotes(config.vaultRoot, stringArg(args.query, "query"), limit)
         if (matches.length === 0) return textResult("(no matches)")
         return textResult(matches.map((m) => `${m.path}:${m.line}: ${m.snippet}`).join("\n"))
+      }
+      case "vault_graph": {
+        const folder = typeof args.folder === "string" && args.folder.trim() ? args.folder : "."
+        const limit = typeof args.limit === "number" ? args.limit : 200
+        return textResult(formatGraph(await buildGraph(config.vaultRoot, folder), limit))
+      }
+      case "vault_create_missing_page": {
+        const res = await createMissingPage(config.vaultRoot, {
+          title: stringArg(args.title, "title"),
+          folder: typeof args.folder === "string" ? args.folder : undefined,
+          summary: typeof args.summary === "string" ? args.summary : undefined,
+          body: typeof args.body === "string" ? args.body : undefined,
+          aliases: Array.isArray(args.aliases) ? args.aliases.map(String) : undefined,
+          related: Array.isArray(args.related) ? args.related.map(String) : undefined,
+          visibility: typeof args.visibility === "string" ? args.visibility : undefined,
+          readonlyPrefixes: config.readonlyPrefixes,
+        })
+        return textResult(
+          res.created
+            ? `Created ${res.path} (id ${res.id})`
+            : `Not created — ${res.reason}. Nothing was overwritten.`,
+        )
       }
       case "vault_write_note":
         await writeNote(config.vaultRoot, stringArg(args.path, "path"), stringArg(args.content, "content"), config.readonlyPrefixes)

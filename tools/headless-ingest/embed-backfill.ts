@@ -27,9 +27,10 @@ import { promises as fs } from "node:fs"
 import { readFileSync } from "node:fs"
 import { join, relative } from "node:path"
 
-import { embedPage } from "@/lib/embedding"
+import { createAsyncLimiter, embedPage, isDerivedPage } from "@/lib/embedding"
 import { useWikiStore } from "@/stores/wiki-store"
 import { loadHeadlessConfig } from "./config"
+import { vectorCompact } from "./vector-store"
 
 interface BackfillState {
   /** pageIds already indexed. The whole point of the file. */
@@ -143,6 +144,9 @@ async function main() {
   const maxMinutes = Number(arg("--max-minutes") ?? "0")
   const loadCeiling = Number(arg("--max-load") ?? "1.5")
   const saveEvery = Number(arg("--save-every") ?? "20")
+  // 250: abbastanza raro da non pesare, abbastanza spesso da non far
+  // accumulare i frammenti che rendono quadratica la scrittura
+  const compactEvery = Number(arg("--compact-every") ?? "250")
   const deadline = maxMinutes > 0 ? Date.now() + maxMinutes * 60_000 : Number.POSITIVE_INFINITY
 
   // `--config`, come run.ts e gli altri punti d'ingresso headless
@@ -152,13 +156,52 @@ async function main() {
     throw new Error("embeddingConfig assente o disattivato in app-state.json")
   }
 
-  const pages = await wikiPages(vault)
+  // La concorrenza vale sull'HTTP verso il servizio di embedding, non sulle
+  // scritture: quelle vector-store le serializza già per vault. Senza,
+  // 24 core stanno fermi ad aspettare una risposta per volta.
+  const concorrenza = Number(arg("--concurrency") ?? cfg?.concurrency ?? "8")
+
+  // Una pagina enorme non costa solo il suo tempo: diventa **una sola richiesta**
+  // con migliaia di pezzi, e il servizio di embedding la macina tutta prima di
+  // accettarne altre — quindi tutti i canali in parallelo restano fermi ad
+  // aspettarla. Misurato su questo vault: **144 pagine sopra i 200 KB (85 MB)
+  // tenevano in ostaggio le altre 2.630 (21 MB)**, il 5% dei file per l'80% del
+  // lavoro.
+  //
+  // `--max-kb` fa una passata sulle piccole, che finisce in minuti e rende
+  // l'indice già utile; i libri si riprendono dopo, senza soglia, mentre il
+  // resto è già interrogabile. Non è una scorciatoia: è smettere di lasciare
+  // che l'ordine alfabetico decida cosa viene prima.
+  const maxKb = Number(arg("--max-kb") ?? "0")
+
+  const tutte = await wikiPages(vault)
+  // Stesso filtro di embedAllPages, non una copia: `isDerivedPage` vive in
+  // embedding.ts ed è l'unica lista. Una copia che dimentica `purpose` o
+  // `schema` sembra identica finché non lo è.
+  const pages = tutte.filter((p) => !isDerivedPage(p.pageId))
+  const scartate = tutte.length - pages.length
   const state = await readState(vault)
   const done = new Set(state.done)
-  const todo = pages.filter((p) => !done.has(p.pageId))
+  let todo = pages.filter((p) => !done.has(p.pageId))
+  let rimandate = 0
+  if (maxKb > 0) {
+    const prima = todo.length
+    const misurate = await Promise.all(todo.map(async (p) => {
+      try {
+        return { p, kb: (await fs.stat(p.abs)).size / 1024 }
+      } catch {
+        return { p, kb: 0 }   // illeggibile: la lascia passare, fallirà con un messaggio
+      }
+    }))
+    todo = misurate.filter((m) => m.kb <= maxKb).map((m) => m.p)
+    rimandate = prima - todo.length
+  }
 
   console.error(
     `[backfill] ${pages.length} pagine · ${done.size} già fatte · ${todo.length} da fare` +
+    (scartate ? ` · ${scartate} derivate escluse` : "") +
+    (rimandate ? ` · ${rimandate} sopra ${maxKb} KB rimandate` : "") +
+    ` · ${concorrenza} in parallelo` +
     (maxMinutes ? ` · finestra ${maxMinutes} min` : "") +
     ` · tetto carico ${loadCeiling}`,
   )
@@ -173,25 +216,32 @@ async function main() {
   process.on("SIGINT", () => void stop("interrotto").then(() => process.exit(0)))
   process.on("SIGTERM", () => void stop("terminato").then(() => process.exit(0)))
 
-  for (const { pageId, abs } of todo) {
-    if (fermato) break
-    if (Date.now() > deadline) {
-      console.error("[backfill] finestra esaurita, mi fermo — lo stato è salvato")
-      break
-    }
-    if (!(await waitForQuiet(loadCeiling, deadline))) break
+  const limita = createAsyncLimiter(concorrenza)
+  const grandeKb = Number(arg("--warn-kb") ?? "200")
+
+  async function lavora(pageId: string, abs: string): Promise<void> {
+    if (fermato || Date.now() > deadline) return
+    if (!(await waitForQuiet(loadCeiling, deadline))) { fermato = true; return }
 
     let content: string
     try {
       content = await fs.readFile(abs, "utf8")
     } catch (err) {
       state.failed[pageId] = `lettura: ${err instanceof Error ? err.message : String(err)}`
-      continue
+      return
+    }
+
+    // Una pagina fuori scala si annuncia prima di essere lavorata. `log.md` a
+    // 988 KB contro una media di 12 aveva tenuto la coda per due ore, e dal
+    // fuori sembrava un blocco: si vedeva solo che non avanzava più.
+    const kb = content.length / 1024
+    if (kb > grandeKb) {
+      console.error(`[backfill] pagina grande: ${pageId} — ${kb.toFixed(0)} KB, ci vorrà`)
     }
 
     try {
-      // deferOptimization: ottimizzare a ogni pagina rifà lo stesso lavoro
-      // diecimila volte. Si fa una volta sola, alla fine.
+      // deferOptimization: la compattazione si fa a intervalli, non a ogni
+      // pagina — rifarebbe lo stesso lavoro diecimila volte.
       const ok = await embedPage(vault, pageId, pageId.split("/").pop() ?? pageId, content, cfg,
         { deferOptimization: true })
       if (ok) {
@@ -202,21 +252,39 @@ async function main() {
         state.failed[pageId] = "embedPage ha restituito false (nessun pezzo indicizzabile)"
       }
     } catch (err) {
-      // non si inghiotte: si registra e si prosegue, il documento tornerà al prossimo giro
+      // non si inghiotte: si registra e si prosegue, tornerà al prossimo giro
       state.failed[pageId] = err instanceof Error ? err.message : String(err)
       console.error(`[backfill] ERRORE ${pageId}: ${state.failed[pageId].slice(0, 120)}`)
     }
 
     fatte++
+    if (fatte % compactEvery === 0) {
+      const t0 = Date.now()
+      try {
+        const r = await vectorCompact(vault)
+        console.error(`[backfill] compattato in ${((Date.now() - t0) / 1000).toFixed(0)}s` +
+          (r ? ` · ${r.fileRimossi} file rimossi` : ""))
+      } catch (err) {
+        console.error(`[backfill] compattazione fallita: ${err instanceof Error ? err.message : err}`)
+      }
+    }
     if (fatte % saveEvery === 0) {
       await writeState(vault, { ...state, done: [...done] })
-      const pct = ((done.size / pages.length) * 100).toFixed(1)
-      console.error(`[backfill] ${done.size}/${pages.length} (${pct}%) · ` +
+      console.error(`[backfill] ${done.size}/${pages.length} ` +
+        `(${((done.size / pages.length) * 100).toFixed(1)}%) · ` +
         `${Object.keys(state.failed).length} falliti · carico ${loadAvg1().toFixed(2)}`)
     }
   }
 
+  await Promise.all(todo.map(({ pageId, abs }) => limita(() => lavora(pageId, abs))))
+
   await writeState(vault, { ...state, done: [...done] })
+  try {
+    const r = await vectorCompact(vault)
+    console.error(`[backfill] compattazione finale${r ? ` · ${r.fileRimossi} file rimossi` : ""}`)
+  } catch (err) {
+    console.error(`[backfill] compattazione finale fallita: ${err instanceof Error ? err.message : err}`)
+  }
   const rimasti = pages.length - done.size
   console.error(
     `[backfill] fine: ${done.size}/${pages.length} indicizzate · ` +

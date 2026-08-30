@@ -261,14 +261,33 @@ export function createToolServer(): Server {
           return textResult(withActiveProject(formatChatResponse(chat), scope.project, scope.id))
         }
         case "llm_wiki_graph": {
-          await assertMcpEnabled(client)
-          const scope = await resolveProjectScope(client, projectBinding, args)
-          const graph = await client.graph(scope.id, {
-            q: optionalStringArg(args.q),
-            nodeType: optionalStringArg(args.node_type),
-            limit: numberArg(args.limit),
-          })
-          return textResult(withActiveProject(formatGraph(graph.nodes, graph.edges), scope.project, scope.id))
+          // Se l'API dell'app non risponde ma un vault è configurato, il grafo
+          // si legge **dal disco**: sono gli stessi `[[wikilink]]`, e nella
+          // versione da disco ogni nodo porta anche il **percorso vero** del
+          // file — che è ciò che toglie all'agente il bisogno di indovinarlo.
+          //
+          // Serve perché i due allestimenti di questo stesso server non hanno
+          // le stesse capacità: quello locale scrive ma non vedeva il grafo,
+          // quello HTTP vedeva il grafo ma non scriveva. Un agente doveva
+          // sapere quale dei due stava usando. Ora no.
+          try {
+            await assertMcpEnabled(client)
+            const scope = await resolveProjectScope(client, projectBinding, args)
+            const graph = await client.graph(scope.id, {
+              q: optionalStringArg(args.q),
+              nodeType: optionalStringArg(args.node_type),
+              limit: numberArg(args.limit),
+            })
+            return textResult(withActiveProject(formatGraph(graph.nodes, graph.edges), scope.project, scope.id))
+          } catch (err) {
+            if (!vaultConfig) throw err
+            const { buildGraph, formatGraph: formatVaultGraph } = await import("./vault-graph.js")
+            const g = await buildGraph(vaultConfig.vaultRoot, ".")
+            return textResult(
+              `(API dell'app non raggiungibile: grafo letto dal disco)\n\n` +
+                formatVaultGraph(g, numberArg(args.limit) ?? 200),
+            )
+          }
         }
         case "llm_wiki_rescan_sources": {
           await assertMcpEnabled(client)

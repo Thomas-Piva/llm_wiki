@@ -140,9 +140,9 @@ function supportsOpenAiCompatibleBatch(cfg: EmbeddingConfig): boolean {
     && !model.includes("doubao-embedding-vision")
 }
 
-type AsyncLimiter = <T>(task: () => Promise<T>) => Promise<T>
+export type AsyncLimiter = <T>(task: () => Promise<T>) => Promise<T>
 
-function createAsyncLimiter(rawLimit: number | undefined): AsyncLimiter {
+export function createAsyncLimiter(rawLimit: number | undefined): AsyncLimiter {
   const limit = Math.max(1, Math.min(32, Math.floor(rawLimit ?? 1)))
   let active = 0
   const waiters: Array<() => void> = []
@@ -501,6 +501,31 @@ async function preparePageEmbeddingRowsWithRetry(
  * first enable. Skips structural pages (index / log / overview /
  * purpose / schema) — they're aggregate views, not retrieval targets.
  */
+/**
+ * Pages the application maintains rather than a person writing them: the
+ * chronological log, the directory listings, the overview, and the two files
+ * that describe the vault to itself.
+ *
+ * They are excluded from the semantic index because they are *derived* — regenerated
+ * from the pages around them — so there is no question whose right answer is
+ * one of them. Indexing them only dilutes the results.
+ *
+ * There is a second, blunter reason, measured on a real vault: `log.md` grows
+ * by a line per ingested document and had reached **988 KB against a 12 KB
+ * average page**. Embedded in one request it held a backfill queue for over
+ * two hours.
+ *
+ * Exported so the bulk path and any resumable driver share one list instead of
+ * drifting apart — a copy that forgets `purpose` and `schema` looks identical
+ * until the day it isn't.
+ */
+export const DERIVED_PAGE_IDS = ["index", "log", "overview", "purpose", "schema"] as const
+
+export function isDerivedPage(pageId: string): boolean {
+  const base = pageId.replace(/\.md$/i, "").split("/").pop() ?? pageId
+  return (DERIVED_PAGE_IDS as readonly string[]).includes(base)
+}
+
 export async function embedAllPages(
   projectPath: string,
   cfg: EmbeddingConfig,
@@ -533,7 +558,7 @@ export async function embedAllPages(
         walk(node.children)
       } else if (!node.is_dir && node.name.endsWith(".md")) {
         const id = node.name.replace(/\.md$/, "")
-        if (!["index", "log", "overview", "purpose", "schema"].includes(id)) {
+        if (!isDerivedPage(id)) {
           mdFiles.push({ id, path: node.path })
         }
       }

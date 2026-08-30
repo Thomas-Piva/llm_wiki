@@ -176,8 +176,23 @@ export async function buildGraph(vault: string, q?: string, nodeType?: string, l
 
 const pageIndexCache = new Map<string, { at: number; map: Map<string, string> }>()
 
-/** basename(page).md → vault-relative path, cached 120s. Lets a vector hit
- *  (keyed by page_id = filename without .md) resolve back to its file. */
+/** page_id → vault-relative path, cached 120s. Lets a vector hit resolve back
+ *  to its file.
+ *
+ *  Due convenzioni convivono, e la mappa accetta entrambe:
+ *
+ *    basename          `foo`               ← desktop: ingest.ts e embedAllPages
+ *    percorso da wiki/ `sources/foo`       ← headless: embed-backfill.ts
+ *
+ *  Non è un capriccio: su questo vault **104 file su 10.942 condividono il
+ *  basename**. Con la sola chiave corta le loro righe si sovrascriverebbero a
+ *  vicenda e la ricerca ne perderebbe una a testa, senza dare errore. Il
+ *  percorso è univoco per costruzione, quindi il percorso è la chiave che
+ *  scrive il backfill; il basename resta accettato perché è ciò che produce
+ *  l'app desktop, e un indice misto deve risolvere lo stesso.
+ *
+ *  Sulla chiave corta vince il primo incontrato (comportamento di sempre); su
+ *  quella lunga non c'è nulla da dirimere. */
 async function pageIndex(vault: string): Promise<Map<string, string>> {
   const hit = pageIndexCache.get(vault)
   const nowSec = Math.floor(process.uptime())
@@ -188,8 +203,12 @@ async function pageIndex(vault: string): Promise<Map<string, string>> {
       maxBuffer: 32 * 1024 * 1024,
     })
     for (const f of stdout.split("\n").filter(Boolean)) {
-      const id = basename(f).replace(/\.md$/, "")
-      if (!map.has(id)) map.set(id, relative(vault, f))
+      const rel = relative(vault, f)
+      const short = basename(f).replace(/\.md$/, "")
+      if (!map.has(short)) map.set(short, rel)
+      // `wiki/sources/foo.md` → `sources/foo`, la chiave che scrive il backfill
+      const long = relative(join(vault, "wiki"), f).replace(/\.md$/, "").split(sep).join("/")
+      if (long !== short) map.set(long, rel)
     }
   } catch {
     /* no wiki files */
@@ -213,13 +232,32 @@ async function embeddingConfigFor(vault: string): Promise<Record<string, any> | 
  *  chunk per page, resolve paths. Returns [] when embeddings aren't configured
  *  or the index is empty — search then stays keyword-only. */
 async function semanticSearch(vault: string, query: string, topK: number) {
-  // R2R wins when it's configured: it holds the whole corpus, LanceDB only what
-  // the desktop app embedded. Same output shape either way.
+  // LanceDB per prima, R2R solo se LanceDB non risponde.
+  //
+  // L'ordine era invertito, e con ragione finché l'indice nativo era vuoto:
+  // R2R teneva tutto il corpus. Misurato sullo stesso corpus, stesse 200
+  // domande, top-5:
+  //
+  //     R2R + Postgres   p50 1.706,7 ms   p95 2.111,9 ms   488 MB, 1 container, 1 porta
+  //     LanceDB tarato   p50     4,3 ms   p95     7,4 ms   recall@5 99,7%, nessun processo
+  //
+  // Il ripiego non è cortesia: durante la migrazione l'indice nativo si riempie
+  // a pezzi, e una ricerca che torna vuota è indistinguibile da «non c'è
+  // nulla». Finché R2R è acceso risponde lui; quando verrà spento questo ramo
+  // diventa morto da solo, senza altre modifiche.
+  const lance = await lanceSearch(vault, query, topK)
+  if (lance.length > 0) return lance
+
   const r2r = await r2rConfigFor(vault)
   if (r2r) {
     const idx = await pageIndex(vault)
     return r2rSearch(r2r, query, topK, (id) => idx.get(id))
   }
+  return []
+}
+
+/** Il ramo nativo: interroga la tabella dei pezzi in `<vault>/.llm-wiki/lancedb`. */
+async function lanceSearch(vault: string, query: string, topK: number) {
   const cfg = await embeddingConfigFor(vault)
   if (!cfg || !query.trim()) return []
   let qvec: number[] | undefined
@@ -230,7 +268,20 @@ async function semanticSearch(vault: string, query: string, topK: number) {
     return []
   }
   if (!qvec) return []
-  const chunks = await vectorSearchChunks(vault, qvec, Math.max(topK * 3, 12))
+  // Si pesca largo perché poi si raggruppa per pagina, e un libro spezzato in
+  // mille pezzi può occupare da solo i primi candidati. Misurate le pagine
+  // **distinte** per profondità, sul corpus vero (131.301 pezzi):
+  //
+  //     domanda                        top20  top60  top200
+  //     il metodo triune                  20     51     154
+  //     cos'è la metamedicina              9     15      81
+  //     teoria polivagale e trauma         3      7      16   ← la concentrata
+  //
+  // A venti candidati nove domande su dieci hanno già più pagine di quante ne
+  // servano: **il problema non è generale**. Ma sulla decima venti bastano per
+  // tre pagine sole, e sessanta ne danno sette. Pescare il doppio costa una
+  // scansione in memoria che nel p50 non si vede, e alza il caso peggiore.
+  const chunks = await vectorSearchChunks(vault, qvec, Math.max(topK * 6, 30))
   if (!chunks.length) return []
   const idx = await pageIndex(vault)
   const bestByPage = new Map<string, (typeof chunks)[number]>()

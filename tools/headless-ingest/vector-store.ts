@@ -135,6 +135,44 @@ export function vectorDeletePage(vault: string, pageId: string): Promise<void> {
   })
 }
 
+/**
+ * Merge the fragments a long write run leaves behind.
+ *
+ * Every `vectorUpsertChunks` is a delete followed by an add, and each add lands
+ * in its own fragment. The delete has to look through all of them, so the cost
+ * of writing page N grows with N: measured on a real backfill, 87 pages/minute
+ * at the start and **2 pages/minute** after six thousand, with the embedding
+ * time flat at ~1s throughout. The remaining work went from two hours to forty.
+ *
+ * LanceDB's own guidance is to optimize often when writes are frequent. The
+ * desktop path does; this one used to return without doing anything, which is
+ * why the problem only ever appeared headless.
+ *
+ * Not called per page on purpose: compaction rewrites data, so doing it every
+ * time would trade one quadratic cost for another.
+ */
+export async function vectorCompact(vault: string): Promise<{ fileRimossi: number } | null> {
+  const tbl = await openTable(vault)
+  if (!tbl) return null
+  return serialize(vault, async () => {
+    // `cleanupOlderThan` è la parte che conta, e senza di essa la chiamata non
+    // fa nulla: il peso non sta nei dati ma nello **storico delle versioni**.
+    // Misurato su un riempimento reale a metà strada — 6.200 pagine, 17.737
+    // righe:
+    //
+    //     _versions      3,3 GB   12.402 manifest    ← il peso è tutto qui
+    //     data            84 MB    6.201 file        ← i dati veri
+    //
+    // Ogni pagina costa due transazioni (cancella, poi inserisci) e ogni
+    // manifest elenca tutti i frammenti esistenti: il manifest N pesa quanto N,
+    // quindi conservarli tutti costa N². `optimize()` da solo non li tocca
+    // perché di default risparmia i file più recenti di sette giorni, e i
+    // nostri hanno minuti. Con la pulizia: **3,31 GB → 0,03 GB, 31.004 file → 4**.
+    const stats = await tbl.optimize({ cleanupOlderThan: new Date(), deleteUnverified: true })
+    return { fileRimossi: stats?.prune?.oldVersionsRemoved ?? 0 }
+  })
+}
+
 export async function vectorCountChunks(vault: string): Promise<number> {
   const tbl = await openTable(vault)
   return tbl ? tbl.countRows() : 0

@@ -10,6 +10,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
+import { isDerivedPage } from "@/lib/embedding"
 import { pagesToDo, readState, statePath, wikiPages, writeState } from "./embed-backfill"
 
 let vault: string
@@ -109,5 +110,30 @@ describe("cammino sul vault", () => {
     await page("a.md")
     await page("c.md")
     expect((await wikiPages(vault)).map((p) => p.pageId)).toEqual(["a", "b", "c"])
+  })
+})
+
+describe("pagine derivate: si riusa la lista dell'app, non una copia", () => {
+  it("esclude le cinque che embedAllPages esclude", () => {
+    for (const id of ["index", "log", "overview", "purpose", "schema"]) {
+      expect(isDerivedPage(id)).toBe(true)
+    }
+  })
+
+  it("le esclude anche annidate, non solo alla radice", () => {
+    // il caso vero: wiki/log.md a 988 KB aveva tenuto la coda due ore
+    expect(isDerivedPage("wiki/log")).toBe(true)
+    expect(isDerivedPage("concepts/index")).toBe(true)
+  })
+
+  it("non tocca le pagine vere che iniziano allo stesso modo", () => {
+    expect(isDerivedPage("indexing-strategie")).toBe(false)
+    expect(isDerivedPage("logica-simbolica")).toBe(false)
+    expect(isDerivedPage("concepts/metamedicina")).toBe(false)
+  })
+
+  it("regge l'estensione, perché i chiamanti non concordano", () => {
+    expect(isDerivedPage("log.md")).toBe(true)
+    expect(isDerivedPage("wiki/overview.md")).toBe(true)
   })
 })

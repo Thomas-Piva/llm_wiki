@@ -13,7 +13,7 @@ import { join } from "node:path"
 import { autoIngest, TRANSCRIPT_MISSING } from "@/lib/ingest"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { type IngestTask, readQueue, writeQueue } from "./queue-store"
-import { indexPagesInR2R } from "./r2r-search"
+import { indexPagesNative } from "./index-pages"
 
 /** Recordings: the only inputs gated by a daily transcription allowance. */
 const MEDIA_EXTENSIONS = /\.(mp3|m4a|wav|ogg|flac|aac|wma|mp4|mov|mkv|avi|webm|m4v)$/i
@@ -87,7 +87,7 @@ async function processTask(
     )
     // Put the fresh pages in the semantic index straight away, so a document is
     // searchable the moment it lands rather than at the next full reindex.
-    await indexPagesInR2R(opts.project, written)
+    await indexPagesNative(opts.project, written)
     return { status: "done", error: null }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

@@ -15,6 +15,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import { dirname, join, basename, extname } from "node:path"
 import { tmpdir } from "node:os"
 import { emitEvent } from "./tauri-event-bus"
+import { appendOnlyEnabled, ensureIdentity, isWikiPage, nuovoIdPagina } from "./note-policy"
 import {
   embedTexts,
   vectorUpsertChunks,
@@ -225,10 +226,16 @@ export async function invoke<T = unknown>(cmd: string, args: any = {}): Promise<
     }
 
     case "write_file":
-    case "write_file_atomic":
+    case "write_file_atomic": {
       await fs.mkdir(dirname(args.path), { recursive: true })
-      await fs.writeFile(args.path, args.contents, "utf8")
+      // D2 + D4: una pagina del wiki nasce con `id:` e `visibility:`. Non si
+      // normalizza nulla di già scritto — si aggiunge solo ciò che manca.
+      const contenuto = isWikiPage(args.path)
+        ? ensureIdentity(args.contents, { newId: nuovoIdPagina })
+        : args.contents
+      await fs.writeFile(args.path, contenuto, "utf8")
       return undefined as T
+    }
 
     case "write_file_base64":
       await fs.mkdir(dirname(args.path), { recursive: true })
@@ -240,6 +247,17 @@ export async function invoke<T = unknown>(cmd: string, args: any = {}): Promise<
       return undefined as T
 
     case "delete_file":
+      // D5: sul vault della cliente si aggiunge, non si cancella. Una fusione
+      // che cancella un file fa smettere di risolvere ogni `[[nome-morto]]`
+      // **senza dare errore** — e il lint ne conta già 5.254 di rotti. I
+      // candidati alla fusione vanno in un referto, non in una `rm`.
+      if (isWikiPage(args.path) && appendOnlyEnabled()) {
+        console.warn(
+          `[policy] cancellazione rifiutata (append-only): ${args.path}. ` +
+            `Per disattivare: VAULT_APPEND_ONLY=0`,
+        )
+        return undefined as T
+      }
       await fs.rm(args.path, { force: true })
       return undefined as T
 
