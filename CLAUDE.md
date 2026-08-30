@@ -28,10 +28,22 @@ npx vitest run <file>  # one file, while iterating
 type errors once reached a tagged release this way. Use `npm run typecheck`.
 
 **`npx vitest run` (bare) is not the test suite.** It collects `*.real-llm.test.ts`, which need
-network and fail without it, plus `mcp-server/**` and a few `tools/headless-ingest` files written
-for `node:test`, which vitest cannot execute at all. The result looks like "6 failures and 16
-broken files" permanently. `npm run test:mocks` excludes all of that and is **fully green**; run
-`npm run mcp:test` alongside it.
+network and fail without it, plus `mcp-server/**`, which vitest cannot execute at all. The result
+looks like "6 failures and 16 broken files" permanently. `npm run test:mocks` excludes both and is
+the real command; run `npm run mcp:test` alongside it.
+
+Read its summary line carefully — the two numbers mean different things:
+
+```
+Test Files  4 failed | 145 passed (149)
+     Tests  2018 passed (2018)          ← zero failing assertions
+```
+
+**Four files always fail to load, and it is not a regression.** `prefix-stability`,
+`retry-truncation`, `run-tool` and `split-upload` under `tools/headless-ingest/` are standalone
+scripts that end in `process.exit(0)`; they are named `*.test.ts`, so vitest collects them and
+reports the exit as a failure. Baseline is **4 failed files, 0 failed tests**. Before blaming your
+change for a fifth, check whether the file even imports what you touched.
 
 And a duplicate import can pass `tsc` and still break the vite transform, taking a dozen test
 files down. If tests fail to *collect*, read the transform error before touching the tests.
