@@ -63,10 +63,19 @@ export const VAULT_TOOLS: Tool[] = [
   },
   {
     name: "vault_list_notes",
-    description: "List markdown note paths under a folder (or the whole vault if omitted).",
+    description:
+      "List paths under a folder (or the whole vault if omitted). Markdown by default; pass kind:\"images\" to list image files instead — that is how you find a path for vault_read_image, since images live next to the notes but never show up in a markdown listing.",
     inputSchema: {
       type: "object",
-      properties: { folder: { type: "string", description: "Vault-relative folder, e.g. entities/clienti" } },
+      properties: {
+        folder: { type: "string", description: "Vault-relative folder, e.g. entities/clienti or wiki/media" },
+        kind: {
+          type: "string",
+          enum: ["notes", "images"],
+          description: "notes = .md (default), images = png/jpg/jpeg/gif/webp/svg/bmp/tiff",
+        },
+        limit: { type: "number", description: "Max paths returned, default 200" },
+      },
       additionalProperties: false,
     },
   },
@@ -302,8 +311,16 @@ export async function callVaultTool(
         return textResult(await readNote(config.vaultRoot, stringArg(args.path, "path")))
       case "vault_list_notes": {
         const folder = typeof args.folder === "string" && args.folder.trim() ? args.folder : "."
-        const notes = await listNotes(config.vaultRoot, folder)
-        return textResult(notes.join("\n") || "(no notes found)")
+        const kind = args.kind === "images" ? "images" : "notes"
+        const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Number(args.limit)) : 200
+        const tutti = await listNotes(config.vaultRoot, folder, kind)
+        // Un vault reale ne ha decine di migliaia: restituirli tutti riempie il
+        // contesto del chiamante e non lo aiuta. Dire quanti sono, invece, sì.
+        const mostrati = tutti.slice(0, limit)
+        const coda = tutti.length > mostrati.length
+          ? `\n\n(${mostrati.length} di ${tutti.length} — alza limit o restringi folder)`
+          : ""
+        return textResult((mostrati.join("\n") || `(no ${kind} found)`) + coda)
       }
       case "vault_search_notes": {
         const limit = typeof args.limit === "number" ? args.limit : 20

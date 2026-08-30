@@ -194,11 +194,34 @@ export async function openSource(
   return { sources: [...sources], links };
 }
 
-export async function listNotes(vaultRoot: string, relFolder: string = "."): Promise<string[]> {
+/**
+ * Elenca i file di un tipo sotto una cartella.
+ *
+ * ⚠️ `kind: "images"` non è una comodità: senza, le immagini del vault sono
+ * **invisibili**. Nessun tool le elenca — la ricerca guarda il testo, il grafo
+ * guarda le pagine, e questo elenco guardava solo i `.md`. Misurato sul vault
+ * di una cliente: **9.890 immagini in 812 cartelle**, e un agente a cui era
+ * stato chiesto di mostrarne una ha concluso che «le immagini stanno su
+ * Dropbox, non nel filesystem» — scambiando "non le trovo" per "non ci sono".
+ *
+ * `vault_read_image` esiste da prima, ma senza un modo di scoprire un percorso
+ * era uno strumento che si può usare solo se già si sa la risposta.
+ */
+const IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".tiff"];
+
+export async function listNotes(
+  vaultRoot: string,
+  relFolder: string = ".",
+  kind: "notes" | "images" = "notes",
+): Promise<string[]> {
   const target = resolveVaultPath(vaultRoot, relFolder);
   const entries = await fs.readdir(target, { recursive: true, withFileTypes: true });
+  const vuole = (nome: string) => {
+    const n = nome.toLowerCase();
+    return kind === "images" ? IMAGE_EXTS.some((e) => n.endsWith(e)) : n.endsWith(".md");
+  };
   return entries
-    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith(".md"))
+    .filter((e) => e.isFile() && vuole(e.name))
     .map((e) => path.relative(vaultRoot, path.join(e.parentPath, e.name)))
     .sort();
 }
