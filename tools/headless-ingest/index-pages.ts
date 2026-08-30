@@ -26,6 +26,14 @@ import { join } from "node:path"
 
 import { embedPage, isDerivedPage } from "@/lib/embedding"
 
+import {
+  estraiPagina,
+  grafoCausaleAcceso,
+  grafoEntitaAcceso,
+  scriviRiga,
+  type ChiamaModello,
+} from "./entity-extract"
+import { splitFrontmatter } from "./note-policy"
 import { vectorCompact } from "./vector-store"
 
 /** `wiki/sources/foo.md` → `sources/foo`. Restituisce null fuori da `wiki/`. */
@@ -64,6 +72,97 @@ export async function embeddingConfigFor(vault: string): Promise<EmbeddingConfig
   }
 }
 
+/** Il modello scelto al banco. Il ripiego è più veloce ma **moltiplica i
+ *  quasi-doppioni** (`il creare` accanto a `creare`), quindi va deduplicato a
+ *  valle e costa 5,6 volte tanto: si usa solo se il primo non risponde. */
+const MODELLO_ENTITA = "inclusionai/ling-3.0-flash"
+const MODELLO_RIPIEGO = "google/gemini-2.5-flash-lite"
+
+/** Legge l'`_index.md` di una cartella. `null` se non c'è. */
+function lettoreIndici(vault: string) {
+  return async (folder: string): Promise<string | null> => {
+    const rel = folder === "." ? ["wiki", "_index.md"] : ["wiki", ...folder.split("/"), "_index.md"]
+    try {
+      return await readFile(join(vault, ...rel), "utf8")
+    } catch {
+      return null
+    }
+  }
+}
+
+/** Costruisce il chiamante del modello dalla configurazione già nel vault. */
+async function chiamanteModello(vault: string): Promise<ChiamaModello | null> {
+  let cfg: any
+  try {
+    const raw = await readFile(join(vault, ".llm-wiki", "app-state.json"), "utf8")
+    cfg = JSON.parse(raw).llmConfig
+  } catch {
+    return null
+  }
+  const base = String(cfg?.customEndpoint ?? "").replace(/\/$/, "")
+  const key = cfg?.apiKey
+  if (!base || !key) return null
+
+  return async (prompt: string): Promise<string> => {
+    for (const model of [MODELLO_ENTITA, MODELLO_RIPIEGO]) {
+      try {
+        const res = await fetch(`${base}/chat/completions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0,
+            // ⛔ Su questo endpoint il ragionamento va spento con `enabled`,
+            // non con `effort:"none"`: l'effort è per-modello e questi non
+            // dichiarano di accettare "none". Misurato altrove: 6,3 s → 15,0 s
+            // per chiamata, in silenzio.
+            reasoning: { enabled: false },
+          }),
+        })
+        if (!res.ok) continue
+        const d: any = await res.json()
+        const testo = d?.choices?.[0]?.message?.content
+        if (typeof testo === "string" && testo.trim()) return testo
+      } catch {
+        /* passa al ripiego */
+      }
+    }
+    return ""
+  }
+}
+
+/**
+ * D0 + D3 — il grafo delle entità, all'ingest e **solo dove è acceso**.
+ *
+ * Non è una scelta di prudenza: l'estrazione costa 15 ore sul vault della
+ * cliente e 593 sul Dropbox intero. Acceso per cartella con `entity_graph: true`
+ * nell'`_index.md`; le relazioni tipizzate vogliono in più `causal_graph: true`,
+ * perché il grafo su tutto costa 10-30 volte l'indicizzazione e sulle domande
+ * normali **perde** contro la ricerca vettoriale (recall@5 32,5% contro 67%).
+ *
+ * Senza flag non parte, non spende e non scrive niente.
+ */
+async function estraiEntitaSeAcceso(
+  vault: string,
+  pageId: string,
+  contenuto: string,
+  chiama: ChiamaModello | null,
+): Promise<void> {
+  if (!chiama) return
+  const leggi = lettoreIndici(vault)
+  const fm = splitFrontmatter(contenuto).fm
+  if (!(await grafoEntitaAcceso(pageId, leggi, fm))) return
+  const causale = await grafoCausaleAcceso(pageId, leggi, fm)
+  try {
+    const riga = await estraiPagina(pageId, contenuto, chiama, causale)
+    if (riga.entita.length) await scriviRiga(vault, riga)
+  } catch (err) {
+    // non si inghiotte in silenzio: il grafo è un di più, l'indice no
+    console.warn(`[grafo] ${pageId}: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
 /**
  * Indicizza le pagine passate. Restituisce quante ne sono entrate.
  *
@@ -77,6 +176,7 @@ export async function indexPagesNative(vault: string, relPaths: string[]): Promi
   const cfg = await embeddingConfigFor(vault)
   if (!cfg) return 0
 
+  const chiama = await chiamanteModello(vault)
   let indexed = 0
   for (const rel of relPaths) {
     const pageId = pageIdFor(rel)
@@ -93,7 +193,12 @@ export async function indexPagesNative(vault: string, relPaths: string[]): Promi
       const ok = await embedPage(vault, pageId, titleFor(content, pageId), content, cfg as never, {
         deferOptimization: true,
       })
-      if (ok) indexed++
+      if (ok) {
+        indexed++
+        // D0: il grafo si estrae qui, una volta sola, mentre il documento è già
+        // in mano. Alla domanda resterà solo da leggerlo.
+        await estraiEntitaSeAcceso(vault, pageId, content, chiama)
+      }
     } catch (err) {
       console.warn(`[index] ${rel}: ${err instanceof Error ? err.message : String(err)}`)
     }

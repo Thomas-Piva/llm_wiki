@@ -59,6 +59,8 @@ export interface IncomingChunk {
   chunk_text: string
   heading_path: string
   embedding: number[]
+  /** D4 — etichetta di visibilità. Assente = `VISIBILITY_DEFAULT`. */
+  visibility?: string
 }
 
 export interface ChunkSearchResult {
@@ -68,6 +70,33 @@ export interface ChunkSearchResult {
   chunk_text: string
   heading_path: string
   score: number
+  visibility: string
+}
+
+/** D4 — l'etichetta con cui la ricerca pre-filtra. "all" finché un cliente non chiede altro. */
+export const VISIBILITY_DEFAULT = "all"
+
+/**
+ * Aggiunge la colonna `visibility` a una tabella che non ce l'ha ancora.
+ *
+ * Va chiamata una volta sull'indice esistente: `addColumns` con un'espressione
+ * costante non ricalcola nulla e non tocca i vettori — le 248.083 righe già
+ * indicizzate restano dove sono. Idempotente: se la colonna c'è, non fa niente.
+ */
+export async function ensureVisibilityColumn(vault: string): Promise<"aggiunta" | "c'era già" | "nessuna tabella"> {
+  const tbl = await openTable(vault)
+  if (!tbl) return "nessuna tabella"
+  const schema = await tbl.schema()
+  if (schema.fields.some((f) => f.name === "visibility")) return "c'era già"
+  return serialize(vault, async () => {
+    await tbl.addColumns([{ name: "visibility", valueSql: `'${VISIBILITY_DEFAULT}'` }])
+    return "aggiunta" as const
+  })
+}
+
+/** `["all","interna"]` → `visibility IN ('all','interna')`, con le virgolette messe a posto. */
+function visibilityClause(visibility: string[]): string {
+  return `visibility IN (${visibility.map(sqlStr).join(", ")})`
 }
 
 /**
@@ -89,6 +118,10 @@ export function vectorUpsertChunks(
       chunk_index: c.chunk_index,
       chunk_text: c.chunk_text,
       heading_path: c.heading_path ?? "",
+      // D4: ogni pezzo nasce con la sua etichetta. Costa una colonna adesso;
+      // aggiungerla dopo significherebbe riscrivere il motore di ricerca più la
+      // colla fra indice e permessi — ~1.800 righe nei casi reali.
+      visibility: c.visibility ?? VISIBILITY_DEFAULT,
       vector: c.embedding.map((v) => Math.fround(v)),
     }))
     let tbl: lancedb.Table | null
@@ -112,12 +145,21 @@ export async function vectorSearchChunks(
   vault: string,
   queryEmbedding: number[],
   topK: number,
+  opts?: { visibility?: string[] },
 ): Promise<ChunkSearchResult[]> {
   const tbl = await openTable(vault)
   if (!tbl) return []
-  const res = (await tbl.search(queryEmbedding).limit(Math.max(1, topK)).toArray()) as Array<
-    Record<string, unknown>
-  >
+  let q = tbl.search(queryEmbedding).limit(Math.max(1, topK))
+  if (opts?.visibility?.length) {
+    // D4 — **pre**-filtro, non post: in questa versione `where()` sulla query
+    // vettoriale filtra PRIMA della ricerca, ed è il comportamento voluto.
+    // Filtrare dopo è il difetto documentato dei prototipi: perde risultati e
+    // il recall crolla proprio sulle domande selettive, cioè quelle in cui i
+    // permessi contano. La colonna esiste anche quando nessuno la usa: così
+    // questo ramo è una clausola, non una riscrittura del motore.
+    q = q.where(visibilityClause(opts.visibility))
+  }
+  const res = (await q.toArray()) as Array<Record<string, unknown>>
   return res.map((r) => ({
     chunk_id: String(r.chunk_id),
     page_id: String(r.page_id),
@@ -125,6 +167,7 @@ export async function vectorSearchChunks(
     chunk_text: String(r.chunk_text ?? ""),
     heading_path: String(r.heading_path ?? ""),
     score: 1 / (1 + Number(r._distance ?? 0)),
+    visibility: String(r.visibility ?? VISIBILITY_DEFAULT),
   }))
 }
 
