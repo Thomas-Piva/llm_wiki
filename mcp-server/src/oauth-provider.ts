@@ -1,4 +1,6 @@
 import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto"
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs"
+import { dirname } from "node:path"
 import type { Response } from "express"
 import type { OAuthServerProvider, AuthorizationParams } from "@modelcontextprotocol/sdk/server/auth/provider.js"
 import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js"
@@ -42,8 +44,64 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB)
 }
 
+/**
+ * Where the granted authorisations live between restarts.
+ *
+ * Set OAUTH_STATE_FILE to enable; unset keeps the previous in-memory behaviour.
+ * Holding these only in memory meant every service restart silently revoked the
+ * connection: the client still showed as linked, then asked to reconnect on the
+ * next call. Fine while the only user was the person doing the restart, wrong
+ * once someone else depends on it.
+ */
+const STATE_FILE = process.env.OAUTH_STATE_FILE?.trim() || ""
+
+interface PersistedState {
+  clients: Record<string, OAuthClientInformationFull>
+  accessTokens: Record<string, StoredToken>
+  refreshTokens: Record<string, StoredToken>
+}
+
+function loadState(): PersistedState {
+  const empty: PersistedState = { clients: {}, accessTokens: {}, refreshTokens: {} }
+  if (!STATE_FILE) return empty
+  try {
+    const parsed = JSON.parse(readFileSync(STATE_FILE, "utf8"))
+    return {
+      clients: parsed.clients ?? {},
+      accessTokens: parsed.accessTokens ?? {},
+      refreshTokens: parsed.refreshTokens ?? {},
+    }
+  } catch {
+    // Missing or corrupt state is not fatal: the client re-authorises once,
+    // which is exactly the old behaviour rather than a new failure mode.
+    return empty
+  }
+}
+
+/** Write via a temp file + rename so a crash mid-write cannot truncate the state. */
+function saveState(state: PersistedState): void {
+  if (!STATE_FILE) return
+  try {
+    mkdirSync(dirname(STATE_FILE), { recursive: true })
+    const tmp = `${STATE_FILE}.tmp`
+    writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 })
+    renameSync(tmp, STATE_FILE)
+  } catch (err) {
+    console.error("[oauth] could not persist state:", err instanceof Error ? err.message : err)
+  }
+}
+
 class DynamicClientsStore implements OAuthRegisteredClientsStore {
   private readonly clients = new Map<string, OAuthClientInformationFull>()
+  onChange?: () => void
+
+  constructor(initial: Record<string, OAuthClientInformationFull> = {}) {
+    for (const [id, client] of Object.entries(initial)) this.clients.set(id, client)
+  }
+
+  entries(): Record<string, OAuthClientInformationFull> {
+    return Object.fromEntries(this.clients)
+  }
 
   async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
     return this.clients.get(clientId)
@@ -54,6 +112,7 @@ class DynamicClientsStore implements OAuthRegisteredClientsStore {
   ): Promise<OAuthClientInformationFull> {
     const full = client as OAuthClientInformationFull
     this.clients.set(full.client_id, full)
+    this.onChange?.()
     return full
   }
 }
@@ -80,17 +139,31 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!)
 }
 
-// Tokens don't survive a process restart — ponytail: acceptable for
-// personal single-owner use, add persistent token storage if this ever
-// needs to survive restarts without re-auth.
+// Granted authorisations survive a restart when OAUTH_STATE_FILE is set; codes
+// and pending approvals deliberately do not — they live five minutes and a
+// restart mid-handshake is better retried than resumed.
 export class LlmWikiOAuthProvider implements OAuthServerProvider {
-  readonly clientsStore = new DynamicClientsStore()
+  readonly clientsStore: DynamicClientsStore
   private codes = new Map<string, StoredCode>()
-  private accessTokens = new Map<string, StoredToken>()
-  private refreshTokens = new Map<string, StoredToken>()
+  private accessTokens: Map<string, StoredToken>
+  private refreshTokens: Map<string, StoredToken>
   private pendingApprovals = new Map<string, PendingApproval>()
 
-  constructor(private readonly approvalPassword: string) {}
+  constructor(private readonly approvalPassword: string) {
+    const state = loadState()
+    this.clientsStore = new DynamicClientsStore(state.clients)
+    this.accessTokens = new Map(Object.entries(state.accessTokens))
+    this.refreshTokens = new Map(Object.entries(state.refreshTokens))
+    this.clientsStore.onChange = () => this.persist()
+  }
+
+  private persist(): void {
+    saveState({
+      clients: this.clientsStore.entries(),
+      accessTokens: Object.fromEntries(this.accessTokens),
+      refreshTokens: Object.fromEntries(this.refreshTokens),
+    })
+  }
 
   async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
     const requestId = randomUUID()
@@ -146,6 +219,7 @@ export class LlmWikiOAuthProvider implements OAuthServerProvider {
       expiresAt: Date.now() + ACCESS_TOKEN_TTL_MS,
     })
     this.refreshTokens.set(refreshToken, { clientId: client.client_id, scopes: stored.scopes, expiresAt: Infinity })
+    this.persist()
 
     return {
       access_token: accessToken,
@@ -167,6 +241,9 @@ export class LlmWikiOAuthProvider implements OAuthServerProvider {
       scopes: stored.scopes,
       expiresAt: Date.now() + ACCESS_TOKEN_TTL_MS,
     })
+    // Anche il rinnovo va scritto: senza, un riavvio dopo un refresh riporta
+    // il token vecchio, gia' scaduto, e il client rifa' il login comunque.
+    this.persist()
     return {
       access_token: accessToken,
       token_type: "bearer",
