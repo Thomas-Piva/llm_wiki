@@ -723,11 +723,15 @@ async function autoIngestImpl(
   // The desktop has no such command and throws, which lands on today's
   // behaviour: straight to MinerU.
   let localPdfText = ""
+  // Il testo che pdftotext ha prodotto anche quando non basta a evitare
+  // l'OCR. Serve come rete: se MinerU poi rifiuta il file, poco testo vero è
+  // sempre meglio del PDF grezzo, che la guardia scarta e il documento con lui.
+  let pdfTextParziale = ""
   if (isPdf) {
     try {
       const raw = await invoke<string>("pdf_extract_text", { path: sp })
-      const useful = typeof raw === "string" ? raw.replace(/\s/g, "").length : 0
-      if (useful >= 20) {
+      if (typeof raw === "string") pdfTextParziale = raw
+      if (typeof raw === "string" && pdfTextLooksExtracted(raw)) {
         // Log the decision before writing anything: an exception in the cache
         // write used to leave no trace at all, and the run looked as if this
         // branch had never existed.
@@ -737,7 +741,15 @@ async function autoIngestImpl(
         await createDirectory(`${cacheDir}/.cache`)
         await writeFile(`${cacheDir}/.cache/${fileName}.txt`, raw)
       } else {
-        console.log(`[ingest:pdftotext] "${fileName}": nessun testo — è una scansione, passo a MinerU`)
+        // Dire *quanto* è stato estratto e su quante pagine: "nessun testo" su
+        // un file da cui ne erano usciti 802 caratteri ha mandato la diagnosi
+        // sulla strada sbagliata per mezza giornata.
+        const utili = typeof raw === "string" ? raw.replace(/\s/g, "").length : 0
+        const pagine = typeof raw === "string" ? (raw.match(/\f/g)?.length ?? 0) + 1 : 1
+        console.log(
+          `[ingest:pdftotext] "${fileName}": ${utili} caratteri su ~${pagine} pagine ` +
+            `(${(utili / pagine).toFixed(1)}/pagina, soglia ${MIN_PDF_CHARS_PER_PAGE}) — è una scansione, passo a MinerU`,
+        )
       }
     } catch (err) {
       // On the desktop the command does not exist and this is the expected
@@ -774,7 +786,31 @@ async function autoIngestImpl(
     } catch (err) {
       throwIfIngestAborted(signal, activityId)
       const msg = trimInlineStatus(err instanceof Error ? err.message : String(err))
-      console.warn(`[ingest:mineru] MinerU parsing failed, falling back to pdfium: ${msg}`)
+      // ⚠️ Il ripiego «built-in» è il `read_file` nativo, che sul desktop sa
+      // estrarre un PDF. **Sul percorso headless non c'è**: lì si finisce a
+      // rileggere il PDF grezzo, la guardia lo vede binario e il documento
+      // muore. Il caso concreto è il tetto di MinerU cloud — «number of pages
+      // exceeds limit (200 pages)» — che colpisce esattamente i libri, cioè i
+      // file per cui l'OCR serviva. Se pdftotext aveva cavato qualcosa, per
+      // poco che sia, quel qualcosa vale più del niente: lo si mette in cache e
+      // il resto della catena lo trova come se fosse uscito da MinerU.
+      const utiliParziali = pdfTextParziale.replace(/\s/g, "").length
+      if (utiliParziali >= 20) {
+        try {
+          const cacheDir = sp.substring(0, sp.lastIndexOf("/"))
+          await createDirectory(`${cacheDir}/.cache`)
+          await writeFile(`${cacheDir}/.cache/${fileName}.txt`, pdfTextParziale)
+          localPdfText = pdfTextParziale
+          console.warn(
+            `[ingest:mineru] "${fileName}" rifiutato da MinerU (${msg}) — ripiego sui ` +
+              `${utiliParziali} caratteri estratti localmente, parziali ma veri`,
+          )
+        } catch (cacheErr) {
+          console.warn(`[ingest:mineru] ripiego non riuscito: ${cacheErr instanceof Error ? cacheErr.message : cacheErr}`)
+        }
+      } else {
+        console.warn(`[ingest:mineru] "${fileName}" non parsato e senza testo locale da usare: ${msg}`)
+      }
       activity.updateItem(activityId, {
         detail: `MinerU failed, falling back to built-in PDF extraction: ${msg}`,
       })
@@ -1148,10 +1184,17 @@ async function autoIngestImpl(
       // bytes, so this guard is where a spent daily allowance actually shows
       // up. Marking it failed would bury the file — nothing retries a failure.
       const isMedia = /\.(mp3|m4a|wav|ogg|flac|aac|wma|mp4|mov|mkv|avi|webm|m4v)$/i.test(fileName)
+      // Dire *cosa* si è visto, non solo che è andata male. «nessun parser
+      // disponibile» su file che avevano un parser, e da cui il testo era pure
+      // uscito, ha portato a diagnosticare "formato non supportato" per quattro
+      // documenti perfettamente leggibili. Il messaggio è la prima cosa che
+      // qualcuno legge, e mandava a cercare nel posto sbagliato.
+      const misura = `${enrichedSourceContent.length} caratteri letti, ` +
+        `${(quotaCaratteriStrani(enrichedSourceContent) * 100).toFixed(1)}% non testuali`
       throw new Error(
         isMedia
           ? `${TRANSCRIPT_MISSING}: "${fileName}" non ha ancora una trascrizione (quota o servizio non disponibile).`
-          : `Estrazione non riuscita per "${fileName}": il contenuto non è testo (nessun parser disponibile).`,
+          : `Estrazione non riuscita per "${fileName}": il contenuto letto non sembra testo (${misura}).`,
       )
     }
     const date = new Date().toISOString().slice(0, 10)
@@ -2047,18 +2090,76 @@ export function currentWikiDate(now: Date = new Date()): string {
 /** Marker for "come back when the transcript exists" — see the fast-mode guard. */
 export const TRANSCRIPT_MISSING = "TRASCRIZIONE_ASSENTE"
 
-export function looksBinary(content: string): boolean {
-  if (!content) return false
-  const sample = content.slice(0, 4000)
-  if (sample.includes("\u0000")) return true
+/**
+ * Sample head, middle and tail rather than just the head.
+ *
+ * ⚠️ Sampling only the beginning is what made this guard reject real books. The
+ * first few thousand characters of a PDF are its cover and front matter, set in
+ * decorative fonts that extractors render worst — the least representative part
+ * of the document there is. Measured on a client PDF: `U+FFFD` was **15.3%**
+ * across the first 4000 characters and **1.18%** across all 151,866, with clean
+ * Spanish prose from the second page on. The head said binary; the document
+ * said text, and the document was right.
+ */
+const SAMPLE_WINDOWS = 12
+const SAMPLE_WINDOW_CHARS = 2000
+
+function sampleWindows(content: string, windows = SAMPLE_WINDOWS, size = SAMPLE_WINDOW_CHARS): string {
+  if (content.length <= windows * size) return content
+  const step = Math.floor((content.length - size) / (windows - 1))
+  let out = ""
+  for (let i = 0; i < windows; i++) out += content.slice(i * step, i * step + size)
+  return out
+}
+
+/**
+ * Fraction of the sample that is not text — the number `looksBinary` decides
+ * on, exported so the error message can state it instead of naming a cause it
+ * has not established.
+ *
+ * `\f` (U+000C) counts as text: it is how pdftotext separates pages, as
+ * ordinary there as a newline. Counting it as binary rejected a 468-page scan
+ * on its own page breaks — 468 form feeds inside 802 extracted characters, 58%
+ * "binary" without a single corrupt byte in it.
+ */
+export function quotaCaratteriStrani(content: string): number {
+  if (!content) return 0
+  const sample = sampleWindows(content)
   let odd = 0
   for (const ch of sample) {
     const c = ch.codePointAt(0)!
-    // control characters other than tab / newline / carriage return
-    if (c < 32 && c !== 9 && c !== 10 && c !== 13) odd++
+    // control characters other than tab / newline / form feed / carriage return
+    if (c < 32 && c !== 9 && c !== 10 && c !== 12 && c !== 13) odd++
     else if (c === 0xfffd) odd++ // replacement char: decoding already failed
   }
-  return odd / sample.length > 0.05
+  return odd / sample.length
+}
+
+export function looksBinary(content: string): boolean {
+  if (!content) return false
+  const sample = sampleWindows(content)
+  if (sample.includes("\u0000")) return true
+  return quotaCaratteriStrani(content) > 0.05
+}
+
+/**
+ * Characters pdftotext must yield **per page** before we believe the PDF
+ * carries real text.
+ *
+ * A flat floor cannot tell a short document from a long scan: 802 characters
+ * clears any fixed threshold, but spread over 468 pages that is 1.7 per page —
+ * a scan whose only extractable content is its own page breaks. That file was
+ * logged as "MinerU non richiesto" and never reached OCR.
+ *
+ * pdftotext emits one `\f` per page, so the page count comes for free.
+ */
+export const MIN_PDF_CHARS_PER_PAGE = 50
+
+export function pdfTextLooksExtracted(raw: string): boolean {
+  const useful = raw.replace(/\s/g, "").length
+  if (useful < 20) return false
+  const pages = (raw.match(/\f/g)?.length ?? 0) + 1
+  return useful / pages >= MIN_PDF_CHARS_PER_PAGE
 }
 
 export function buildFastSourceSummary(
