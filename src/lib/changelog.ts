@@ -29,6 +29,48 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.2.0",
+    date: "2026-08-30",
+    highlights: {
+      en: [
+        "The vector index is now built automatically once a vault is large enough, instead of only ever doing an exact scan. Measured on a 248,083-chunk corpus: 94.9 ms per search becomes 4.3 ms, at 99.7% recall@5. It happens once; later writes fold into it on their own.",
+        "HTML, XML, JSON and YAML are read as the text they contain rather than as their own syntax. On a saved web page from a real vault, 4,566 characters in and 432 of actual content out -- the other 90.5% was markup and inline JavaScript competing with real text at search time.",
+        "Scanned PDFs reach OCR when they should: the check that decides now reads characters per page instead of a flat total, so a 468-page scan yielding 802 characters is no longer mistaken for a short document.",
+        "PDFs are no longer rejected for how their cover page extracts. The binary-content guard samples the whole document instead of its first few thousand characters, and treats page breaks as text.",
+        "Notes written through MCP get a stable id like everywhere else -- and keep it when rewritten, so inbound [[links]] survive an update.",
+        "The ingest size limit follows the value in Settings instead of one pinned in the service file. On a client box that mismatch had 58 documents skipped on every run for days, in a queue that looked busy.",
+        "An unreadable queue file stops the run instead of being silently replaced with an empty one.",
+      ],
+      it: [
+        "L'indice vettoriale si costruisce da solo quando il vault è abbastanza grande, invece di fare sempre la scansione esatta. Misurato su 248.083 pezzi: da 94,9 ms a 4,3 ms per ricerca, con recall@5 al 99,7%. Succede una volta sola; le scritture successive vi rientrano da sé.",
+        "HTML, XML, JSON e YAML entrano come il testo che contengono, non come la loro sintassi. Su una pagina web salvata di un vault vero: 4.566 caratteri in ingresso, 432 di contenuto reale — il restante 90,5% era markup e JavaScript che al momento della ricerca competeva col testo.",
+        "I PDF scansionati arrivano all'OCR quando devono: il controllo guarda i caratteri per pagina invece del totale, quindi una scansione da 468 pagine che ne produce 802 non passa più per un documento corto.",
+        "Un PDF non viene più scartato per come si estrae la sua copertina. Il controllo sul contenuto binario campiona tutto il documento invece dei primi caratteri, e considera i salti pagina come testo.",
+        "Le note scritte via MCP ricevono un id stabile come sulle altre strade — e lo conservano quando vengono riscritte, così i [[collegamenti]] in entrata sopravvivono a un aggiornamento.",
+        "Il limite di dimensione dell'ingest segue il valore nelle Impostazioni invece di uno fissato nel file di servizio. Su un vault reale quella differenza teneva 58 documenti fuori a ogni giro, per giorni, in una coda che sembrava lavorare.",
+        "Una coda illeggibile ferma il giro invece di essere sostituita in silenzio da una vuota.",
+      ],
+      zh: [
+        "当仓库足够大时会自动构建向量索引，而不再总是全量精确扫描。在 248,083 个片段的语料上实测：每次检索从 94.9 毫秒降到 4.3 毫秒，recall@5 为 99.7%。只需构建一次，后续写入会自动并入。",
+        "HTML、XML、JSON 和 YAML 按其所含文本读取，而不是按语法原样入库。对真实仓库中一个保存的网页：输入 4,566 个字符，实际内容 432 个——其余 90.5% 是标记和内联 JavaScript，检索时与真实文本争夺权重。",
+        "扫描版 PDF 会在应当时进入 OCR：判定改为按每页字符数而非总量，因此 468 页仅产出 802 字符的扫描件不再被当作短文档。",
+        "不再因封面页的提取效果而拒绝 PDF。二进制内容检测改为对整篇取样，并将分页符视为文本。",
+        "通过 MCP 写入的笔记会像其他路径一样获得稳定 id，且在重写时保留，使指向它的 [[链接]] 在更新后依然有效。",
+        "摄取的大小上限改为读取设置中的值，而不是服务文件里写死的数字。在客户机器上，这一差异曾让 58 个文档连日在每轮中被跳过，而队列看起来仍在工作。",
+        "队列文件无法解析时会中止本轮，而不是被静默替换为空队列。",
+      ],
+      ru: [
+        "Векторный индекс теперь строится автоматически, когда хранилище достаточно велико, вместо постоянного точного перебора. Измерено на корпусе из 248 083 фрагментов: 94,9 мс на поиск превращаются в 4,3 мс при recall@5 99,7%. Это происходит один раз; последующие записи входят в него сами.",
+        "HTML, XML, JSON и YAML читаются как текст, который они содержат, а не как их собственный синтаксис. На сохранённой веб-странице из реального хранилища: 4566 символов на входе и 432 полезных — остальные 90,5% были разметкой и встроенным JavaScript, конкурировавшими с настоящим текстом при поиске.",
+        "Отсканированные PDF доходят до OCR, когда должны: проверка считает символы на страницу, а не общее число, поэтому скан на 468 страниц с 802 символами больше не принимается за короткий документ.",
+        "PDF больше не отбраковывается из-за того, как извлекается его обложка. Проверка на двоичное содержимое берёт выборку по всему документу, а разрывы страниц считает текстом.",
+        "Заметки, записанные через MCP, получают стабильный id, как и на остальных путях, и сохраняют его при перезаписи, так что входящие [[ссылки]] переживают обновление.",
+        "Ограничение размера при загрузке берётся из настроек, а не из значения, зашитого в файл службы. На машине клиента это расхождение днями оставляло 58 документов за бортом на каждом проходе, в очереди, которая выглядела работающей.",
+        "Нечитаемый файл очереди останавливает проход вместо того, чтобы молча замениться пустым.",
+      ],
+    },
+  },
+  {
     version: "1.1.0",
     date: "2026-08-30",
     highlights: {
