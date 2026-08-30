@@ -2,8 +2,9 @@ import { promises as fs } from "node:fs"
 import path from "node:path"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js"
-import { readNote, listNotes, writeNote, appendNote, searchNotes, VaultError } from "./vault-fs.js"
+import { readNote, listNotes, writeNote, appendNote, searchNotes, readImage, openSource, VaultError } from "./vault-fs.js"
 import { buildGraph, createMissingPage, formatGraph, kebab, nuovoId } from "./vault-graph.js"
+import { buildSignedImageUrl } from "./image-url.js"
 import {
   configLlm,
   flussoOpenAI,
@@ -142,6 +143,32 @@ export const VAULT_TOOLS: Tool[] = [
         content: { type: "string", description: "Text to append" },
       },
       required: ["path", "content"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vault_read_image",
+    description:
+      "Read an image from the vault. Returns it inline AND as a signed HTTPS link, because clients differ: some render MCP image content, others (ChatGPT among them) only render a markdown image URL. Large images are downscaled first — a 2752x1536 figure goes from 6,835 KB to 346 KB and reads identically, since a model downsamples it anyway. The link is HMAC-signed, expires within the hour, and grants read of that one image only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Vault-relative path to the image (png, jpg, gif, webp, svg, bmp, tiff)" },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vault_open_source",
+    description:
+      "Get back to the original a note was built from. Notes keep the path of the file they came from, but the file itself is not on disk — keeping hundreds of GB of originals next to the vault was never possible. Given the note, this mints a temporary Dropbox download link from that path, or points at the local copy when one exists.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Vault-relative path of the note whose source you want" },
+      },
+      required: ["path"],
       additionalProperties: false,
     },
   },
@@ -313,6 +340,28 @@ export async function callVaultTool(
       case "vault_append_note":
         await appendNote(config.vaultRoot, stringArg(args.path, "path"), stringArg(args.content, "content"), config.readonlyPrefixes)
         return textResult(`Appended to ${args.path}`)
+      case "vault_read_image": {
+        const p = stringArg(args.path, "path")
+        const { base64, mimeType } = await readImage(config.vaultRoot, p)
+        // Inline E link: nessuno dei due basta da solo. Il contenuto inline
+        // serve ai client che lo disegnano; il link serve a ChatGPT e simili,
+        // che mostrano solo un'immagine markdown. Il link manca quando il
+        // server non ha segreto o hostname pubblico — allora resta l'inline.
+        const url = buildSignedImageUrl(p)
+        const content: Array<Record<string, unknown>> = [{ type: "image", data: base64, mimeType }]
+        if (url) content.push({ type: "text", text: `![${path.basename(p)}](${url})` })
+        return { content }
+      }
+      case "vault_open_source": {
+        const res = await openSource(config.vaultRoot, stringArg(args.path, "path"))
+        if (res.sources.length === 0) return textResult("No source path recorded in that note.")
+        const righe = res.links.map((l) =>
+          l.url ? `- ${l.source}\n  ${l.url}`
+          : l.local ? `- ${l.source}\n  local: ${l.local}`
+          : `- ${l.source}\n  unavailable: ${l.error}`,
+        )
+        return textResult(righe.join("\n"))
+      }
       default:
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`)
     }
