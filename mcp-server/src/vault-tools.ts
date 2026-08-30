@@ -64,7 +64,8 @@ export const VAULT_TOOLS: Tool[] = [
   {
     name: "vault_list_notes",
     description:
-      "List paths under a folder (or the whole vault if omitted). Markdown by default; pass kind:\"images\" to list image files instead — that is how you find a path for vault_read_image, since images live next to the notes but never show up in a markdown listing.",
+      "LOOKING FOR AN IMAGE? Call this with kind:\"images\" — that is the only way to get a real image path, and vault_read_image needs an exact one. Do not guess paths from what a note references: image files sit in folders no markdown listing shows, so a guessed path returns nothing and the vault looks empty when it is not. " +
+      "Otherwise: lists markdown note paths under a folder, or the whole vault if omitted.",
     inputSchema: {
       type: "object",
       properties: {
@@ -359,7 +360,21 @@ export async function callVaultTool(
         return textResult(`Appended to ${args.path}`)
       case "vault_read_image": {
         const p = stringArg(args.path, "path")
-        const { base64, mimeType } = await readImage(config.vaultRoot, p)
+        // Un percorso inventato dà ENOENT, e l'errore nudo si legge come "questa
+        // immagine non c'è" — da lì un agente conclude che il vault non ne ha,
+        // e lo dice con sicurezza. È successo: ha tirato a indovinare venti
+        // percorsi prima di arrivarci. L'errore deve dire dove si trova la
+        // risposta, non solo che il tentativo è fallito.
+        const { base64, mimeType } = await readImage(config.vaultRoot, p).catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err)
+          if (/ENOENT|no such file/i.test(msg)) {
+            throw new VaultError(
+              `No image at "${p}". Do not try another guess: call vault_list_notes with kind:"images" ` +
+              `to get real paths — image files live in folders the markdown listing never shows.`,
+            )
+          }
+          throw err
+        })
         // Inline E link: nessuno dei due basta da solo. Il contenuto inline
         // serve ai client che lo disegnano; il link serve a ChatGPT e simili,
         // che mostrano solo un'immagine markdown. Il link manca quando il
