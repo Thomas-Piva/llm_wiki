@@ -175,11 +175,33 @@ export function createToolServer(): Server {
     tools: vaultConfig ? [...LLM_WIKI_TOOLS, ...VAULT_TOOLS] : LLM_WIKI_TOOLS,
   }))
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const args = asObject(request.params.arguments ?? {})
     if (isVaultTool(request.params.name)) {
       if (!vaultConfig) throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`)
-      return callVaultTool(request.params.name, args, vaultConfig)
+      // D0 — lo streaming verso l'agente passa dalle notifiche di avanzamento:
+      // è l'unico canale che MCP offre *durante* una chiamata. Senza un
+      // `progressToken` il client non le ha chieste e non se ne mandano — una
+      // notifica non richiesta è rumore che alcuni client trattano da errore.
+      const token = (request.params._meta as { progressToken?: string | number } | undefined)
+        ?.progressToken
+      return callVaultTool(request.params.name, args, vaultConfig, {
+        cercaProve: async (query, topK) => {
+          const scope = await resolveProjectScope(client, projectBinding, {})
+          const r = await client.search(scope.id, query, { topK, includeContent: true })
+          return r.results
+            .map((x: any) => ({ path: String(x.path ?? ""), testo: String(x.snippet ?? x.content ?? "") }))
+            .filter((p: { path: string; testo: string }) => p.path && p.testo)
+        },
+        onPezzo: token
+          ? (testo, totale) => {
+              void extra.sendNotification({
+                method: "notifications/progress",
+                params: { progressToken: token, progress: totale, message: testo },
+              })
+            }
+          : undefined,
+      })
     }
     try {
       switch (request.params.name) {

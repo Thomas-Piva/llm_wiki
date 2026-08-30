@@ -3,7 +3,15 @@ import path from "node:path"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js"
 import { readNote, listNotes, writeNote, appendNote, searchNotes, VaultError } from "./vault-fs.js"
-import { buildGraph, createMissingPage, formatGraph } from "./vault-graph.js"
+import { buildGraph, createMissingPage, formatGraph, kebab, nuovoId } from "./vault-graph.js"
+import {
+  configLlm,
+  flussoOpenAI,
+  potaSulFlusso,
+  PROMPT_VOCE,
+  scriviInStreaming,
+  type Prova,
+} from "./page-stream.js"
 
 // Filenames checked, in order, for the vault's usage rules — the actual
 // content an agent needs before writing (frontmatter schema, folder
@@ -114,6 +122,11 @@ export const VAULT_TOOLS: Tool[] = [
         aliases: { type: "array", items: { type: "string" }, description: "Alternative names that must keep resolving to this page" },
         related: { type: "array", items: { type: "string" }, description: "Page ids to link out to (anti-orphan rule)" },
         visibility: { type: "string", description: "Visibility label the search pre-filters on. Default: all" },
+        generate: {
+          type: "boolean",
+          description:
+            "Write the prose too, streamed. The entry is synthesised from the pages the semantic index already associates with this title, and it may only link to those pages -- so its [[links]] are never guessed. Progress notifications carry the text as it is produced. Without this the page is a stub.",
+        },
       },
       required: ["title"],
       additionalProperties: false,
@@ -168,7 +181,92 @@ async function readConventions(vaultRoot: string): Promise<string> {
   return `No conventions file found at vault root (checked: ${CONVENTIONS_FILENAMES.join(", ")}). Proceed with generic Markdown; no vault-specific schema to follow.`
 }
 
-export async function callVaultTool(name: string, args: Record<string, unknown>, config: VaultToolsConfig) {
+/** Ciò che serve alla generazione e che il server sa procurare: le fonti dal
+ *  motore di ricerca, e un modo per riferire l'avanzamento. */
+export interface DepsGenerazione {
+  cercaProve?: (query: string, topK: number) => Promise<Prova[]>
+  onPezzo?: (testo: string, totale: number) => void
+}
+
+/**
+ * D0 — la voce si scrive su richiesta, in streaming, e i suoi collegamenti non
+ * si indovinano.
+ *
+ * I bersagli ammessi sono **i nomi delle pagine che l'indice ha restituito**:
+ * esistono per costruzione. È la differenza che si misura — sul percorso vecchio
+ * fino a 82 collegamenti verso pagine inesistenti e 55 scritti col percorso, che
+ * il motore non risolve e che spariscono senza dare errore.
+ *
+ * ⛔ Non sovrascrive (D5): se il nome è già preso, si ferma.
+ */
+async function generaVoce(
+  args: Record<string, unknown>,
+  config: VaultToolsConfig,
+  deps: DepsGenerazione,
+) {
+  const titolo = stringArg(args.title, "title")
+  const cartella = (typeof args.folder === "string" && args.folder.trim() ? args.folder : "concepts")
+    .replace(/^\/+|\/+$/g, "")
+  const slug = kebab(titolo)
+  if (!slug) throw new McpError(ErrorCode.InvalidParams, `"${titolo}" non produce un nome valido`)
+
+  const esistenti = await listNotes(config.vaultRoot, ".").catch(() => [] as string[])
+  const collisione = esistenti.find((p) => (p.split("/").pop() ?? p) === `${slug}.md`)
+  if (collisione) return textResult(`Non creata — esiste già: ${collisione}. Nulla è stato scritto.`)
+
+  const llm = await configLlm(config.vaultRoot)
+  if (!llm) return textResult("Non generata — manca la configurazione del modello nel vault.")
+  if (!deps.cercaProve) return textResult("Non generata — il motore di ricerca non è raggiungibile.")
+
+  const prove = await deps.cercaProve(titolo, 6)
+  if (prove.length === 0) {
+    // Una voce senza fonti sarebbe inventata, e una voce inventata è peggio di
+    // una voce che manca: sembra conoscenza.
+    return textResult(`Non generata — nessuna fonte nell'indice sostiene «${titolo}».`)
+  }
+  // D1 — si rimanda a **voci**, non a fonti. Una pagina enciclopedica che punta
+  // a `7-dropbox--14-0triuneproject--16-05libriericerche--35-notebooklm-…` ha un
+  // collegamento tecnicamente valido e illeggibile: risolve, e nessuno lo
+  // seguirà mai. Meglio una voce senza collegamenti che con collegamenti
+  // sbagliati; le fonti restano nell'indice, dove servono davvero.
+  const vicini = prove
+    .filter((p) => /(^|\/)(concepts|entities|docs)\//.test(p.path))
+    .map((p) => (p.path.split("/").pop() ?? p.path).replace(/\.md$/i, ""))
+  const ammessi = new Set(vicini)
+
+  const oggi = new Date().toISOString().slice(0, 10)
+  const frontmatter = [
+    "---",
+    `id: ${nuovoId()}`,
+    `title: ${titolo}`,
+    "summary: Voce generata su richiesta dalle fonti già indicizzate.",
+    `tags: [${cartella.split("/")[0]}]`,
+    `aliases: [${(Array.isArray(args.aliases) ? args.aliases.map(String) : []).join(", ")}]`,
+    "status: draft",
+    `visibility: ${typeof args.visibility === "string" ? args.visibility : "all"}`,
+    `created: ${oggi}`,
+    `updated: ${oggi}`,
+    `related: ${vicini.slice(0, 5).map((v) => `[[${v}]]`).join(",")}`,
+    "---",
+  ].join("\n")
+
+  const rel = `${cartella}/${slug}.md`
+  const flusso = potaSulFlusso(
+    flussoOpenAI(llm.base, llm.key, llm.model)(PROMPT_VOCE(titolo, vicini, prove)),
+    ammessi,
+  )
+  const n = await scriviInStreaming(config.vaultRoot, rel, frontmatter, flusso, deps.onPezzo)
+  return textResult(
+    `Scritta ${rel} · ${n} battute · fonti: ${prove.length} · collegamenti ammessi: ${vicini.join(", ")}`,
+  )
+}
+
+export async function callVaultTool(
+  name: string,
+  args: Record<string, unknown>,
+  config: VaultToolsConfig,
+  deps: DepsGenerazione = {},
+) {
   try {
     switch (name) {
       case "vault_get_conventions":
@@ -192,6 +290,7 @@ export async function callVaultTool(name: string, args: Record<string, unknown>,
         return textResult(formatGraph(await buildGraph(config.vaultRoot, folder), limit))
       }
       case "vault_create_missing_page": {
+        if (args.generate === true) return generaVoce(args, config, deps)
         const res = await createMissingPage(config.vaultRoot, {
           title: stringArg(args.title, "title"),
           folder: typeof args.folder === "string" ? args.folder : undefined,
