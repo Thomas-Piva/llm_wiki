@@ -21,9 +21,10 @@ import { createHash } from "node:crypto"
 import { resolve, dirname, extname, join, relative, sep, basename } from "node:path"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { rgSearch, titleFrom } from "./vault-api"
+import { ricercaIbrida, rgSearch, titleFrom } from "./vault-api"
 import { runStructuralLintOnDisk } from "./lint-runner"
 import { r2rHealth } from "./r2r-search"
+import { appendOnlyEnabled, ensureIdentity, isWikiPage, nuovoIdPagina } from "./note-policy"
 import { enqueueSources } from "./sources-scan"
 import { readQueue } from "./queue-store"
 import {
@@ -281,7 +282,10 @@ export async function dispatchInvoke(cmd: string, args: any, vault: string): Pro
     case "write_file_atomic": {
       const p = guard(vault, A.path)
       await fs.mkdir(dirname(p), { recursive: true })
-      await fs.writeFile(p, A.contents, "utf8")
+      // Le stesse regole di `invoke-shim.ts`, perché questa è **l'altra** strada
+      // per scrivere nel vault: la usa l'interfaccia web. Le avevo messe su una
+      // sola delle due, e una regola che vale a metà non è una regola.
+      await fs.writeFile(p, isWikiPage(p) ? ensureIdentity(A.contents, { newId: nuovoIdPagina }) : A.contents, "utf8")
       return null
     }
     case "write_file_base64": {
@@ -296,7 +300,17 @@ export async function dispatchInvoke(cmd: string, args: any, vault: string): Pro
     }
     case "list_directory": return listDir(guard(vault, A.path), !!A.includeHidden, A.maxDepth, 0)
     case "create_directory": await fs.mkdir(guard(vault, A.path), { recursive: true }); return null
-    case "delete_file": await fs.rm(guard(vault, A.path), { force: true }); return null
+    case "delete_file": {
+      const p = guard(vault, A.path)
+      // D5 — dal sito si aggiunge, non si cancella. Una pagina che sparisce fa
+      // smettere di risolvere ogni `[[nome-morto]]` senza dare errore.
+      if (isWikiPage(p) && appendOnlyEnabled()) {
+        console.warn(`[policy] cancellazione rifiutata (append-only): ${p}. Per disattivare: VAULT_APPEND_ONLY=0`)
+        return null
+      }
+      await fs.rm(p, { force: true })
+      return null
+    }
     case "copy_file": {
       const d = guard(vault, A.destination)
       await fs.mkdir(dirname(d), { recursive: true })
@@ -324,8 +338,10 @@ export async function dispatchInvoke(cmd: string, args: any, vault: string): Pro
 
     // ── wiki ──
     case "search_project": {
-      const results = await rgSearch(vault, String(A.query ?? ""), Number(A.topK ?? 20))
-      return { mode: "keyword", results, tokenHits: results.length, vectorHits: 0 }
+      // Era solo ripgrep: `vectorHits: 0` a ogni domanda, con l'indice
+      // vettoriale inutilizzato accanto. Ora è la stessa funzione che serve
+      // l'API e l'MCP.
+      return ricercaIbrida(vault, String(A.query ?? ""), Number(A.topK ?? 20))
     }
     case "get_page_links": return pageLinks(vault, A.filePath ?? A.path)
     case "find_related_wiki_pages": {

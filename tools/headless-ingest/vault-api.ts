@@ -228,6 +228,38 @@ async function embeddingConfigFor(vault: string): Promise<Record<string, any> | 
   }
 }
 
+/**
+ * Testuale (ripgrep) e semantica (LanceDB) insieme, fuse per percorso: una
+ * pagina trovata in due modi compare una volta sola, e porta con sé il punteggio
+ * vettoriale.
+ *
+ * ⛔ Esportata perché ha **due** chiamanti, ed è così che si è scoperto il
+ * problema: l'API la faceva, l'interfaccia web no. Il sito passava da
+ * `web-invoke.ts`, che cercava con il solo ripgrep e rispondeva `vectorHits: 0`
+ * a ogni domanda — un indice da 7 ms lì accanto, e nessuno che lo interrogasse.
+ * Una sola implementazione, due chiamanti.
+ */
+export async function ricercaIbrida(vault: string, query: string, topKRaw: number) {
+  const topK = Math.min(50, Number(topKRaw) || 20)
+  const [keyword, semantic] = await Promise.all([
+    rgSearch(vault, query, topK),
+    semanticSearch(vault, query, topK),
+  ])
+  const merged = new Map<string, any>()
+  for (const r of keyword) merged.set(r.path, r)
+  for (const r of semantic) {
+    const ex = merged.get(r.path)
+    if (ex) ex.vectorScore = r.vectorScore
+    else merged.set(r.path, r)
+  }
+  return {
+    results: [...merged.values()],
+    mode: semantic.length ? "hybrid" : "keyword",
+    tokenHits: keyword.length,
+    vectorHits: semantic.length,
+  }
+}
+
 /** Embed the query, nearest-neighbour over the chunk table, collapse to best
  *  chunk per page, resolve paths. Returns [] when embeddings aren't configured
  *  or the index is empty — search then stays keyword-only. */
@@ -370,27 +402,7 @@ export async function handleVaultApi(
     return { status: 200, body: { files, truncated: cap.n >= max } }
   }
   if (action === "search") {
-    const q = String(body?.query ?? "")
-    const topK = Math.min(50, Number(body?.topK ?? 20))
-    // Keyword (ripgrep) + semantic (LanceDB) run together; merge by path so a
-    // page matched both ways appears once, carrying its vectorScore.
-    const [keyword, semantic] = await Promise.all([rgSearch(ctx.vault, q, topK), semanticSearch(ctx.vault, q, topK)])
-    const merged = new Map<string, any>()
-    for (const r of keyword) merged.set(r.path, r)
-    for (const r of semantic) {
-      const ex = merged.get(r.path)
-      if (ex) ex.vectorScore = r.vectorScore
-      else merged.set(r.path, r)
-    }
-    return {
-      status: 200,
-      body: {
-        results: [...merged.values()],
-        mode: semantic.length ? "hybrid" : "keyword",
-        tokenHits: keyword.length,
-        vectorHits: semantic.length,
-      },
-    }
+    return { status: 200, body: await ricercaIbrida(ctx.vault, String(body?.query ?? ""), Number(body?.topK ?? 20)) }
   }
   if (action === "lint") {
     // Structural findings (orphans, broken links, pages with no outlinks),
