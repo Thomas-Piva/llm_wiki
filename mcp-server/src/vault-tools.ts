@@ -53,7 +53,7 @@ export const VAULT_TOOLS: Tool[] = [
   },
   {
     name: "vault_read_note",
-    description: "Read the raw content (including frontmatter) of a markdown note at a vault-relative path.",
+    description: "Read the raw content (including frontmatter) of a markdown note at a vault-relative path. If the note embeds images and the user wants to see them, the ![](media/...) targets are real files — resolve them against the vault root and pass them to vault_read_image. To reach the document the note was built from, use vault_open_source.",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string", description: "Vault-relative path, e.g. entities/clienti/mbm-edilizia.md" } },
@@ -65,6 +65,8 @@ export const VAULT_TOOLS: Tool[] = [
     name: "vault_list_notes",
     description:
       "LOOKING FOR AN IMAGE? Call this with kind:\"images\" — that is the only way to get a real image path, and vault_read_image needs an exact one. Do not guess paths from what a note references: image files sit in folders no markdown listing shows, so a guessed path returns nothing and the vault looks empty when it is not. " +
+      "IT RETURNS PATHS, NOT PICTURES: when the user asked to see, show, or list images, follow up with vault_read_image on each one — a list of filenames is not what they asked for. " +
+      "Extracted figures (the ones with generated captions) live under wiki/media; raw/sources holds the untouched originals. " +
       "Otherwise: lists markdown note paths under a folder, or the whole vault if omitted.",
     inputSchema: {
       type: "object",
@@ -82,7 +84,7 @@ export const VAULT_TOOLS: Tool[] = [
   },
   {
     name: "vault_search_notes",
-    description: "Full-text search across all markdown notes in the vault.",
+    description: "Full-text search across all markdown notes in the vault. It returns matching lines, not whole notes: follow up with vault_read_note on the paths that matter. If the words the user chose do not appear anywhere but the topic clearly should exist, the vault indexes meaning too — llm_wiki_search finds passages that never use those exact words.",
     inputSchema: {
       type: "object",
       properties: {
