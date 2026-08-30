@@ -8,6 +8,7 @@ pub mod file_history;
 pub mod file_sync;
 pub mod fs;
 pub mod media_tools;
+pub mod page_embedding;
 pub mod project;
 mod node_runtime;
 pub mod project_maintenance;

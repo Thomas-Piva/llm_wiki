@@ -9,16 +9,19 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { listDirectory, openPathInProject, readFile } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
 import { useTranslation } from "react-i18next"
+import { useAppDialog } from "@/stores/app-dialog-store"
 import { normalizePath } from "@/lib/path-utils"
 import { decideDeleteClick } from "@/lib/sources-tree-delete"
 import { rescanProjectFileSync } from "@/lib/project-file-sync"
-import { naturalCompare } from "@/lib/natural-sort"
+import { sortFileNodes } from "@/lib/file-tree-order"
 import {
   deleteSourceFile,
   deleteSourceFolder,
   enqueueSourceIngest,
   importSourceFiles,
   importSourceFolder,
+  type SkippedSourceImport,
+  type SourceImportResult,
 } from "@/lib/source-lifecycle"
 import { filterRawSourceTree } from "@/lib/source-filter"
 import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
@@ -29,6 +32,7 @@ import { getQueue, type IngestTask } from "@/lib/ingest-queue"
 
 const SOURCE_TREE_INITIAL_ROWS = 160
 const SOURCE_TREE_LOAD_BATCH = 160
+const IMPORT_SKIP_INITIAL_ROWS = 100
 type SourceIngestStatus = "not-ingested" | "ingested" | IngestTask["status"]
 
 // Web build (no Tauri): the vault can be huge (Milena ~300GB). A full
@@ -57,6 +61,7 @@ function mergeLoadedChildren(
 
 export function SourcesView() {
   const { t } = useTranslation()
+  const appDialog = useAppDialog()
   const project = useWikiStore((s) => s.project)
   const selectedFile = useWikiStore((s) => s.selectedFile)
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
@@ -73,6 +78,8 @@ export function SourcesView() {
   const [urlInput, setUrlInput] = useState("")
   const [urlError, setUrlError] = useState<string | null>(null)
   const [urlResults, setUrlResults] = useState<UrlImportResult[]>([])
+  const [importOutcome, setImportOutcome] = useState<ImportOutcome | null>(null)
+  const [showAllImportSkips, setShowAllImportSkips] = useState(false)
   const [ingestedIdentities, setIngestedIdentities] = useState<string[]>([])
   const [queueSnapshot, setQueueSnapshot] = useState<IngestTask[]>(() => [...getQueue()])
   const [sourceQuery, setSourceQuery] = useState("")
@@ -241,10 +248,16 @@ export function SourcesView() {
     if (!selected || selected.length === 0) return
 
     setImporting(true)
+    setImportOutcome(null)
+    setShowAllImportSkips(false)
     const paths = Array.isArray(selected) ? selected : [selected]
     try {
-      await importSourceFiles(project, paths, llmConfig, sourceWatchConfig)
+      const result = await importSourceFiles(project, paths, llmConfig, sourceWatchConfig)
+      setImportOutcome(summarizeImportOutcome(result, null))
       await loadSources()
+    } catch (err) {
+      console.error("Failed to import files:", err)
+      setImportOutcome(summarizeImportOutcome(null, err))
     } finally {
       setImporting(false)
     }
@@ -261,17 +274,23 @@ export function SourcesView() {
     if (!selected) return
 
     setImporting(true)
+    setImportOutcome(null)
+    setShowAllImportSkips(false)
     try {
       if (Array.isArray(selected)) {
         // Web: the directory picker already uploaded every file in the folder
         // to raw/sources — ingest them as a batch (no server-side folder to walk).
         await importSourceFiles(project, selected, llmConfig, sourceWatchConfig)
       } else {
-        await importSourceFolder(project, selected, llmConfig, sourceWatchConfig)
+        // Il referto sugli scarti arriva da monte con `fd9c953`: senza, un file
+        // saltato per dimensione o tipo spariva senza dirlo a nessuno.
+        const result = await importSourceFolder(project, selected, llmConfig, sourceWatchConfig)
+        setImportOutcome(summarizeImportOutcome(result, null))
       }
       await loadSources()
     } catch (err) {
       console.error(`Failed to import folder:`, err)
+      setImportOutcome(summarizeImportOutcome(null, err))
     } finally {
       setImporting(false)
     }
@@ -315,10 +334,10 @@ export function SourcesView() {
       await openPathInProject(project.path, node.path)
     } catch (err) {
       console.error("Failed to open source externally:", err)
-      window.alert(t("sources.openExternalFailed", {
+      await appDialog.alert({ message: t("sources.openExternalFailed", {
         name: node.name,
         error: String(err),
-      }))
+      }) })
     }
   }
 
@@ -346,7 +365,7 @@ export function SourcesView() {
       }
     } catch (err) {
       console.error("Failed to delete source:", err)
-      window.alert(`Failed to delete: ${err}`)
+      await appDialog.alert({ message: `Failed to delete: ${err}` })
     }
   }
 
@@ -382,7 +401,7 @@ export function SourcesView() {
       }
     } catch (err) {
       console.error("Failed to delete folder:", err)
-      window.alert(`Failed to delete folder: ${err}`)
+      await appDialog.alert({ message: `Failed to delete folder: ${err}` })
     }
   }
 
@@ -519,6 +538,57 @@ export function SourcesView() {
             })}
           </div>
         )}
+        {importOutcome && (
+          <div className="mx-4 mt-3 space-y-1 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            <div className="flex items-start justify-between gap-2">
+              <span className="font-medium">
+                {importOutcome.error
+                  ? t("sources.importSkip.failed", {
+                      defaultValue: "Import failed: {{error}}",
+                      error: importOutcome.error,
+                    })
+                  : t("sources.importSkip.summary", {
+                      defaultValue: "Imported {{imported}}, skipped {{skipped}}",
+                      imported: importOutcome.importedCount,
+                      skipped: importOutcome.skipped.length,
+                    })}
+              </span>
+              <button
+                type="button"
+                onClick={() => setImportOutcome(null)}
+                className="shrink-0 rounded p-0.5 hover:bg-destructive/20"
+                aria-label={t("common.dismiss", { defaultValue: "Dismiss" })}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+            {importOutcome.skipped
+              .slice(0, showAllImportSkips ? undefined : IMPORT_SKIP_INITIAL_ROWS)
+              .map((item, index) => (
+                <div key={`${item.name}-${index}`} className="pl-1">
+                  {item.name}
+                  {": "}
+                  {t(`sources.importSkip.reason.${item.reason}`, {
+                    defaultValue: item.reason,
+                  })}
+                  {item.detail ? ` (${item.detail})` : ""}
+                </div>
+              ))}
+            {importOutcome.skipped.length > IMPORT_SKIP_INITIAL_ROWS && (
+              <button
+                type="button"
+                className="pl-1 font-medium underline underline-offset-2"
+                onClick={() => setShowAllImportSkips((current) => !current)}
+              >
+                {showAllImportSkips
+                  ? t("sources.importSkip.showLess")
+                  : t("sources.importSkip.showRemaining", {
+                      count: importOutcome.skipped.length - IMPORT_SKIP_INITIAL_ROWS,
+                    })}
+              </button>
+            )}
+          </div>
+        )}
         {sources.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 p-8 text-center text-sm text-muted-foreground">
             <p>{t("sources.noSources")}</p>
@@ -610,6 +680,31 @@ function countFiles(nodes: FileNode[]): number {
   return count
 }
 
+export interface ImportOutcome {
+  importedCount: number
+  skipped: SkippedSourceImport[]
+  error: string | null
+}
+
+/**
+ * Decides whether an import needs to say anything to the user.
+ * A clean import stays quiet; anything skipped or thrown gets reported.
+ */
+export function summarizeImportOutcome(
+  result: SourceImportResult | null,
+  error: unknown,
+): ImportOutcome | null {
+  if (error) {
+    return {
+      importedCount: result?.imported.length ?? 0,
+      skipped: result?.skipped ?? [],
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+  if (!result || result.skipped.length === 0) return null
+  return { importedCount: result.imported.length, skipped: result.skipped, error: null }
+}
+
 export function filterSourceTreeByQuery(
   nodes: readonly FileNode[],
   query: string,
@@ -633,11 +728,7 @@ export function filterSourceTreeByQuery(
 }
 
 function sortSourceNodes(nodes: readonly FileNode[]): FileNode[] {
-  return [...nodes].sort((a, b) => {
-    if (a.is_dir && !b.is_dir) return -1
-    if (!a.is_dir && b.is_dir) return 1
-    return naturalCompare(a.name, b.name)
-  })
+  return sortFileNodes(nodes)
 }
 
 function flattenVisibleRows(

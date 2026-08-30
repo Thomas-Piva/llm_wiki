@@ -8,6 +8,7 @@ import {
 import {
   isAdaptiveAnthropicModel,
   isGeminiThinkingLevelModel,
+  isOpenRouterEndpoint,
   normalizeReasoningForProvider,
 } from "@/lib/reasoning-capabilities"
 
@@ -467,6 +468,24 @@ function buildOpenAiCompatibleBody(
   adaptKimiBody(config, body)
   adaptXiaomiMimoBody(config, body, reasoning)
 
+  // ⛔ Qui a monte c'era un secondo ramo OpenRouter, aggiunto da `57c5576`, con
+  // un `return body` che lo faceva vincere e rendeva **codice morto** quello
+  // sotto (`isOpenRouterEndpoint(config)`). Tolto di proposito nel merge, e la
+  // ragione è misurata, non estetica:
+  //
+  //     upstream   mode "off" → { effort: "none" }
+  //     noi        mode "off" → { enabled: false }
+  //
+  // L'`effort` è **per-modello** e i modelli dichiarano quali valori accettano.
+  // Il vault della cliente gira su `deepseek/deepseek-v4-flash-0731`, che elenca
+  // solo max/high/low: mandargli "none" si appoggia a un valore che non ha mai
+  // dichiarato. Misurato quando è successo: **6,3 s → 15,0 s per chiamata**,
+  // token di ragionamento **0 → 109**, e nessun errore — solo tre volte più
+  // lento.
+  //
+  // Il ramo che resta copre anche i casi di quello tolto, e meglio: `custom` con
+  // budget va in `max_tokens`, e `max` diventa `effort: "high"` invece di un
+  // `effort: "max"` che OpenRouter non conosce.
   if (isDeepSeekEndpoint(config)) {
     // DeepSeek V4 thinking mode. `thinking.type=disabled` is the most
     // important path for ingestion/rewrite tasks: it prevents the model

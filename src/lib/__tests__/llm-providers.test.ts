@@ -464,6 +464,38 @@ describe("Sampling override translation across wires", () => {
     expect(body.max_completion_tokens).toBeUndefined()
   })
 
+  it("maps OpenRouter reasoning settings to its documented request object", () => {
+    const cfg = getProviderConfig({
+      provider: "custom",
+      apiKey: "k",
+      model: "vendor/reasoning-model",
+      ollamaUrl: "",
+      customEndpoint: "https://openrouter.ai/api/v1",
+      apiMode: "chat_completions",
+      maxContextSize: 128000,
+    })
+
+    expect(cfg.buildBody(baseMessages, { reasoning: { mode: "low" } }))
+      .toMatchObject({ reasoning: { effort: "low" } })
+    // ⛔ Questa riga arriva da monte con `effort: "none"` e qui è **volutamente
+    // diversa**. `effort` è per-modello e i modelli dichiarano quali valori
+    // accettano: `deepseek/deepseek-v4-flash-0731`, su cui gira il vault di una
+    // cliente, elenca solo max/high/low. Mandargli "none" si appoggia a un
+    // valore mai dichiarato, e quando è successo si è misurato **6,3 s → 15,0 s
+    // per chiamata** con 109 token di ragionamento al posto di zero — senza un
+    // errore, solo tre volte più lento.
+    //
+    // `enabled: false` è l'interruttore indipendente dal modello: spegne il
+    // pensiero su tutto il catalogo invece che sul sottoinsieme che enumera
+    // "none". Se un merge futuro rimette `effort`, questo test diventa rosso —
+    // ed è esattamente il suo mestiere.
+    expect(cfg.buildBody(baseMessages, { reasoning: { mode: "off" } }))
+      .toMatchObject({ reasoning: { enabled: false } })
+    expect(cfg.buildBody(baseMessages, {
+      reasoning: { mode: "custom", budgetTokens: 2048 },
+    })).toMatchObject({ reasoning: { max_tokens: 2048 } })
+  })
+
   it("custom Kimi routes strip unsupported temperature overrides", () => {
     const cfg = getProviderConfig({
       provider: "custom",

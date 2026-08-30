@@ -414,10 +414,14 @@ LLM Wiki は、手元の文書を整理された相互リンク付きの知識�
 ### ソースからビルド
 
 ```bash
-# 前提条件: Node.js 20+, Rust 1.70+
+# 前提条件: Node.js 20+, Rust 1.88+, protoc
+#   macOS:   brew install protobuf
+#   Linux:   sudo apt install protobuf-compiler
+#   Windows: choco install protoc
 git clone https://github.com/nashsu/llm_wiki.git
 cd llm_wiki
 npm install
+npm --prefix mcp-server ci && npm run mcp:build   # mcp-server/dist は Tauri リソースとして同梱されます
 npm run tauri dev      # 開発モード
 npm run tauri build    # 本番ビルド
 ```
@@ -453,6 +457,7 @@ LLM Wiki は組み込みのローカル HTTP API（`http://127.0.0.1:19828` で�
 - `POST /api/v1/projects/{id}/chat` — 非ストリーミングの Rust バックエンド Agent chat エンドポイント。assistant message、references、usage、tool events を返し、Wiki / Source / Web / AnyTXT 検索に対応します。`mode: "deep"` では証拠収集範囲を広げます
 - `GET /api/v1/projects/{id}/graph` — wikilinks の知識グラフ
 - `POST /api/v1/projects/{id}/sources/rescan` — バックエンドの再スキャンをトリガー
+- `POST /api/v1/projects/{id}/pages/embed` — 外部で作成・更新された単一の `wiki/*.md` ページを、ベクトル DB 全体を再構築せずにインデックス化
 
 **設定 → API + MCP** から API を有効化し、Token を発行できます。必要に応じて、ローカルからの認証なしアクセスも切り替えられます。
 

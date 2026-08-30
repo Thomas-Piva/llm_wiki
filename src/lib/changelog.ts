@@ -26,6 +26,116 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.1.0",
+    date: "2026-08-30",
+    highlights: {
+      en: [
+        "Semantic search now runs on the bundled LanceDB index instead of an external R2R service: p50 dropped from 1,848 ms to 7 ms on the same corpus, and the service, its Postgres container and two listening ports are gone.",
+        "Pages written straight into wiki/ are indexed as they land, incrementally, instead of waiting for a full rebuild.",
+        "Every wiki page is written with a stable id and a visibility label; deleting a wiki page is refused by default (VAULT_APPEND_ONLY=0 to opt out).",
+        "Vector search can pre-filter on visibility before the scan, so permissions never cost recall.",
+        "Optional per-folder entity graph at ingest, with typed causal relations behind their own flag; each relation ships the quote it came from.",
+        "MCP: read the wikilink graph from disk with each page's real path, and create the page a dangling [[link]] points to -- optionally writing the prose, streamed.",
+        "Merged 42 upstream commits, keeping our OpenRouter reasoning switch (enabled:false rather than effort:\"none\", which some models never advertise).",
+      ],
+      zh: [
+        "语义搜索改用内置 LanceDB 索引，不再依赖外部 R2R 服务：同一语料下 p50 从 1848 毫秒降至 7 毫秒，并移除了该服务、其 Postgres 容器和两个监听端口。",
+        "直接写入 wiki/ 的页面会即时增量索引，无需等待整体重建。",
+        "每个 wiki 页面写入时都带稳定 id 与可见性标签；默认拒绝删除 wiki 页面（可用 VAULT_APPEND_ONLY=0 关闭）。",
+        "向量检索可在扫描前按可见性预过滤，权限不再牺牲召回。",
+        "可按目录开启的实体图谱，带独立开关的因果关系；每条关系都附带原文引用。",
+        "MCP：从磁盘读取 wikilink 图谱并给出每页真实路径，可创建断链 [[link]] 指向的页面，并可流式生成正文。",
+        "合并上游 42 个提交，保留我们的 OpenRouter 推理开关（enabled:false 而非部分模型并未声明的 effort:\"none\"）。",
+      ],
+      it: [
+        "La ricerca semantica gira sull'indice LanceDB incluso invece che su un servizio R2R esterno: sullo stesso corpus il p50 passa da 1.848 ms a 7 ms, e spariscono il servizio, il suo container Postgres e due porte in ascolto.",
+        "Le pagine scritte direttamente in wiki/ vengono indicizzate appena compaiono, in modo incrementale, senza aspettare una ricostruzione completa.",
+        "Ogni pagina del wiki nasce con un id stabile e un'etichetta di visibilità; cancellarne una viene rifiutato di default (VAULT_APPEND_ONLY=0 per disattivare).",
+        "La ricerca vettoriale pre-filtra sulla visibilità prima della scansione, così i permessi non costano recall.",
+        "Grafo delle entità all'ingest, acceso per cartella, con relazioni causali tipizzate dietro un flag a parte; ogni relazione porta la citazione da cui viene.",
+        "MCP: legge il grafo dei wikilink dal disco col percorso vero di ogni pagina, e crea la pagina che un [[collegamento]] cerca — volendo scrivendone anche la prosa, in streaming.",
+        "Uniti 42 commit da monte, tenendo il nostro interruttore sul reasoning di OpenRouter (enabled:false invece di effort:\"none\", che alcuni modelli non dichiarano).",
+      ],
+      ru: [
+        "Семантический поиск работает на встроенном индексе LanceDB вместо внешнего сервиса R2R: на том же корпусе p50 упал с 1848 мс до 7 мс, а сам сервис, его контейнер Postgres и два открытых порта исчезли.",
+        "Страницы, записанные прямо в wiki/, индексируются сразу и инкрементально, без полной перестройки.",
+        "Каждая страница вики получает стабильный id и метку видимости; удаление страницы вики по умолчанию запрещено (VAULT_APPEND_ONLY=0 для отключения).",
+        "Векторный поиск фильтрует по видимости до сканирования, поэтому права доступа не стоят полноты выдачи.",
+        "Граф сущностей на этапе ingest, включаемый по папкам, с типизированными причинными связями за отдельным флагом; каждая связь несёт свою цитату.",
+        "MCP: чтение графа wikilink с диска с реальным путём каждой страницы и создание страницы, на которую указывает битая [[ссылка]], при желании — с потоковой генерацией текста.",
+        "Влито 42 коммита из upstream с сохранением нашего переключателя reasoning для OpenRouter (enabled:false вместо effort:\"none\", который заявляют не все модели).",
+      ],
+    },
+  },
+  {
+    version: "0.6.11",
+    date: "2026-08-25",
+    highlights: {
+      en: [
+        "Added configurable reasoning effort for Ingest tasks across supported models and providers.",
+        "Fixed Claude Code CLI provider tests by preserving local isolation settings and passing MCP configuration arguments correctly.",
+        "Made raw source file lists use consistent natural numeric ordering across the app.",
+        "Prevented stale raw source entries from appearing when switching projects.",
+        "Expanded source-build documentation and improved related tests, stability, and compatibility.",
+      ],
+      zh: [
+        "新增可配置的 Ingest 推理强度，并完善不同模型与 Provider 的适配。",
+        "修复 Claude Code CLI Provider 测试，保留本地隔离设置并正确传递 MCP 配置参数。",
+        "原始资料列表统一使用自然数字排序。",
+        "修复切换项目时可能短暂显示旧项目原始资料的问题。",
+        "补充源码构建文档，并完善相关测试、稳定性与兼容性。",
+      ],
+    },
+  },
+  {
+    version: "0.6.10",
+    date: "2026-08-21",
+    highlights: {
+      en: [
+        "Added source-based knowledge filtering.",
+        "Added batch Deep Research for review items and support for rerunning completed or failed research tasks.",
+        "Added support for MinerU 3.0-3.2 backend names and made image captions follow the configured output language.",
+        "Added detailed reporting for files skipped during source import.",
+        "Improved large duplicate scans and fixed Deep Research concurrency, file naming, vector indexing, and wikilink consistency.",
+        "Improved Agent model routing and provider compatibility, and fixed language detection, retry behavior, and Windows CRLF data integrity issues.",
+      ],
+      zh: [
+        "新增按原始资料来源筛选知识内容。",
+        "Review 支持批量执行深度研究，并可重新运行已完成或失败的研究任务。",
+        "支持 MinerU 3.0-3.2 后端名称，图片描述会遵循配置的输出语言。",
+        "文件导入新增跳过文件及具体原因的详细报告。",
+        "优化大规模重复文件扫描，并修复深度研究并发、文件命名、向量索引和 Wiki 链接一致性问题。",
+        "完善 Agent 模型路由与 Provider 兼容性，并修复语言误判、重试行为和 Windows CRLF 数据完整性问题。",
+      ],
+    },
+  },
+  {
+    version: "0.6.9",
+    date: "2026-08-14",
+    highlights: {
+      en: [
+        "Added a single-page Wiki vector indexing API and MCP tool with safe incremental updates.",
+        "Added an answer context details panel for inspecting context size, categorized references, and knowledge-graph evidence.",
+        "Added streaming Chat API responses and concurrent Ingest processing for faster external integrations and bulk imports.",
+        "Made file history opt-in and configurable, with bounded version retention.",
+        "Expanded scheduled imports with cross-project monitoring and source name or path filtering.",
+        "Added external source-file opening, a global Settings shortcut, and Russian and Italian interface translations.",
+        "Added support for authenticated local MinerU and improved trusted proxy TLS options, CJK filenames, and structured data preservation during Ingest.",
+        "Improved existing features and fixed stability, compatibility, indexing, and data-integrity issues.",
+      ],
+      zh: [
+        "新增单个 Wiki 页面向量索引 API 和 MCP 工具，并支持安全的增量更新。",
+        "新增回答上下文详情面板，可查看上下文长度、分类引用和知识图谱证据。",
+        "Chat API 新增流式输出，并支持并发 Ingest，提升外部集成和批量导入效率。",
+        "文件历史改为可选功能，并支持配置有限的版本保留数量。",
+        "扩展定时导入，支持跨项目监控以及按来源名称或路径过滤。",
+        "支持使用系统默认程序打开原始资料，新增全局设置快捷键，并加入俄语和意大利语界面。",
+        "完善本地 MinerU 鉴权、受信任代理 TLS 选项、CJK 文件名和 Ingest 结构化数据保留。",
+        "优化现有功能，并修复稳定性、兼容性、索引和数据完整性问题。",
+      ],
+    },
+  },
+  {
     version: "0.6.8",
     date: "2026-08-07",
     highlights: {

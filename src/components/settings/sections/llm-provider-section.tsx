@@ -794,13 +794,8 @@ function PresetRow({
             value={ingestReasoning}
             config={resolvedConfig}
             onChange={(ingestReasoning) => onChange({ ingestReasoning })}
-            title={t("settings.sections.llm.reasoning.ingestTitle", {
-              defaultValue: "Reasoning during ingest",
-            })}
-            hint={t("settings.sections.llm.reasoning.ingestHint", {
-              defaultValue:
-                "Off is usually right: ingest asks for structured output and thinking costs time without helping. Raise it only if the model refuses to run with reasoning disabled.",
-            })}
+            title={t("settings.sections.llm.reasoning.ingestTitle")}
+            hint={t("settings.sections.llm.reasoning.ingestHint")}
           />
 
           <div className="space-y-2 rounded-md border p-3">
@@ -940,9 +935,11 @@ function ReasoningControls({
           </span>
         </div>
       )}
-      <p className="text-xs text-muted-foreground">
-        {t("settings.sections.llm.reasoning.hint")}
-      </p>
+      {!hint && (
+        <p className="text-xs text-muted-foreground">
+          {t("settings.sections.llm.reasoning.hint")}
+        </p>
+      )}
     </div>
   )
 }

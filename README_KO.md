@@ -414,12 +414,16 @@ LLM Wiki는 문서를 자동으로 정리되고 서로 연결된 지식 베이�
 ### 소스에서 빌드
 
 ```bash
-# Prerequisites: Node.js 20+, Rust 1.70+
+# 사전 요구 사항: Node.js 20+, Rust 1.88+, protoc
+#   macOS:   brew install protobuf
+#   Linux:   sudo apt install protobuf-compiler
+#   Windows: choco install protoc
 git clone https://github.com/nashsu/llm_wiki.git
 cd llm_wiki
 npm install
-npm run tauri dev      # Development
-npm run tauri build    # Production build
+npm --prefix mcp-server ci && npm run mcp:build   # mcp-server/dist는 Tauri 리소스로 번들됩니다
+npm run tauri dev      # 개발 모드
+npm run tauri build    # 프로덕션 빌드
 ```
 
 ### Chrome Extension
@@ -453,6 +457,7 @@ LLM Wiki에는 `http://127.0.0.1:19828`의 내장 로컬 HTTP API가 포함되�
 - `POST /api/v1/projects/{id}/chat` — 비스트리밍 Rust 백엔드 Agent chat 엔드포인트로 assistant message, references, usage, tool events를 반환하며 Wiki/Source/Web/AnyTXT 검색을 지원합니다. `mode: "deep"`은 증거 수집 범위를 넓힙니다
 - `GET /api/v1/projects/{id}/graph` — wikilinks graph
 - `POST /api/v1/projects/{id}/sources/rescan` — backend rescan trigger
+- `POST /api/v1/projects/{id}/pages/embed` — 전체 벡터 DB를 재구축하지 않고 외부에서 생성하거나 수정한 `wiki/*.md` 페이지 하나를 인덱싱
 
 **Settings → API + MCP**에서 API를 활성화하고 token을 생성할 수 있습니다. 필요하면 로컬 unauthenticated access도 켜거나 끌 수 있습니다.
 

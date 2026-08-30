@@ -416,7 +416,7 @@ export interface ProviderOverride {
   apiMode?: CustomApiMode
   maxContextSize?: number
   reasoning?: ReasoningConfig
-  /** Reasoning for ingest's structured calls. See LlmConfig.ingestReasoning. */
+  /** Reasoning used by structured ingest calls; defaults to off. */
   ingestReasoning?: ReasoningConfig
   localCliIsolation?: boolean
   codexCliTimeoutMinutes?: number

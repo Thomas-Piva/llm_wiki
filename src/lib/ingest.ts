@@ -306,6 +306,9 @@ function resolveCaptionConfig(
     azureApiVersion: mm.azureApiVersion,
     azureModelFamily: mm.azureModelFamily,
     apiMode: mm.apiMode,
+    // The dedicated caption provider has no separate reasoning control. Reuse
+    // the ingest preference and let its own provider capabilities normalize it.
+    ingestReasoning: mainLlm.ingestReasoning,
     // The caption helper hits `streamChat` directly, which doesn't
     // care about `maxContextSize` (that field is for the analysis
     // / generation prompt-truncation logic). Keep it set so the
@@ -313,9 +316,9 @@ function resolveCaptionConfig(
     maxContextSize: mainLlm.maxContextSize,
   }
 }
-import { buildLanguageDirective } from "@/lib/output-language"
+import { buildLanguageDirective, getOutputLanguage } from "@/lib/output-language"
 import { detectLanguage } from "@/lib/detect-language"
-import { sameScriptFamily } from "@/lib/language-metadata"
+import { getLanguagePromptName, sameScriptFamily } from "@/lib/language-metadata"
 import { resolveIngestReasoning } from "@/lib/reasoning-capabilities"
 import {
   loadProjectWikiSchemaRouting,
@@ -950,6 +953,7 @@ async function autoIngestImpl(
                     isSavedImagePromptUrl(pp, sourceSummarySlug, url),
                   urlToAbsPath: (url) => promptImageUrlToAbs(pp, url),
                   concurrency: mmCfg.concurrency,
+                  outputLanguage: getLanguagePromptName(getOutputLanguage(sourceContent)),
                   onProgress: (done, total) =>
                     activity.updateItem(activityId, {
                       detail: `Captioning images... ${done}/${total}`,
@@ -963,7 +967,13 @@ async function autoIngestImpl(
               )
             }
           }
-          await injectImagesIntoSourceSummary(pp, sourceIdentity, sourceSummarySlug, savedImages)
+          await injectImagesIntoSourceSummary(
+            pp,
+            sourceIdentity,
+            sourceSummarySlug,
+            savedImages,
+            getLanguagePromptName(getOutputLanguage(sourceContent)),
+          )
           // Re-embed the source-summary page so caption text lands
           // in the search index. Without this step, search by image
           // content stays empty for files ingested before captioning
@@ -1099,6 +1109,7 @@ async function autoIngestImpl(
           shouldCaption: (url) => url.startsWith(ourMediaPrefix) || isSavedImagePromptUrl(pp, sourceSummarySlug, url),
           urlToAbsPath: (url) => promptImageUrlToAbs(pp, url),
           concurrency: mmCfg.concurrency,
+          outputLanguage: getLanguagePromptName(getOutputLanguage(enrichedSourceContent)),
           onProgress: (done, total) =>
             activity.updateItem(activityId, {
               detail: `Captioning images... ${done}/${total}`,
@@ -1553,7 +1564,13 @@ async function autoIngestImpl(
   // want the safety-net section to slip image refs into the wiki
   // through the back door.
   if (mmCfg.enabled && savedImages.length > 0 && !signal?.aborted) {
-    await injectImagesIntoSourceSummary(pp, sourceIdentity, sourceSummarySlug, savedImages)
+    await injectImagesIntoSourceSummary(
+      pp,
+      sourceIdentity,
+      sourceSummarySlug,
+      savedImages,
+      getLanguagePromptName(getOutputLanguage(sourceContent)),
+    )
   }
 
   if (writtenPaths.length > 0) {
@@ -1725,7 +1742,15 @@ export function rewriteIngestPathFromTitleForTargetLanguage(
   content: string,
   targetLang: string | undefined,
 ): string {
-  if (!targetLang || targetLang === "auto" || !CJK_OUTPUT_LANGUAGES.has(targetLang)) {
+  const title = extractGeneratedPageTitle(content)
+  // "auto" (the default output language) means "follow the source", so resolve
+  // it from the generated title. The title is the filename authority; using
+  // the whole body lets large SQL/code blocks or English technical prose
+  // outweigh a short CJK title and silently retain an ASCII filename.
+  const shouldUseCjkFilename = !targetLang || targetLang === "auto"
+    ? Boolean(title && containsCjk(title))
+    : CJK_OUTPUT_LANGUAGES.has(targetLang)
+  if (!shouldUseCjkFilename) {
     return relativePath
   }
   if (
@@ -1735,7 +1760,6 @@ export function rewriteIngestPathFromTitleForTargetLanguage(
   ) {
     return relativePath
   }
-  const title = extractGeneratedPageTitle(content)
   if (!title || !containsCjk(title)) return relativePath
 
   const slash = relativePath.lastIndexOf("/")
@@ -2443,6 +2467,7 @@ export function buildAnalysisPrompt(
     "- What evidence supports them?",
     "- How strong is the evidence?",
     "- Which named subject is each claim about? Do not transfer claims, limits, or evaluations from one entity/model/product/method to another just because they share keywords.",
+    "- Preserve structured source data verbatim in the analysis when present: include SQL DDL / CREATE TABLE statements, schema definitions, API signatures, configuration, and tables in fenced code blocks or Markdown tables. Do not reduce exact field names, types, constraints, keys, or indexes to prose.",
     "",
     "## Connections to Existing Wiki",
     "- What existing pages does this source relate to?",
@@ -2577,7 +2602,7 @@ export function buildGenerationPrompt(
     "- Preserve subject boundaries: when a source discusses multiple entities/models/products/methods, keep claims, evaluations, limitations, benchmark results, and recommendations attached to the exact subject they describe.",
     "- Do not merge or generalize a claim about one subject into another subject's page solely because they share terms (for example context window size, benchmark name, dataset, architecture, or feature name).",
     "- If a page needs to mention another subject for comparison, write it explicitly as a comparison and cite which source/frontmatter `sources` entry supports that statement.",
-    "- Use kebab-case filenames",
+    "- Use kebab-case for Latin-script filenames; for Chinese/Japanese/Korean titles keep the CJK characters (do NOT romanize to pinyin/romaji or translate to English)",
     "- Derive filenames from the page title in the mandatory output language, but short proper nouns and technical identifiers take precedence: preserve names such as OpenAI, GPT-5, Transformer, CLIP, ImageNet, PyTorch, CUDA, GitHub, arXiv, React, LanceDB, AnyTXT, MinerU, model names, dataset names, tool names, and code identifiers in their standard original form. Do not put raw URLs, citation strings, or full paper titles directly into file paths; convert surrounding descriptive prose to a safe readable title. For Chinese/Japanese/Korean prose titles, keep readable CJK characters in the filename instead of translating the slug to English.",
     "- Preserve structured source data verbatim: copy SQL DDL / CREATE TABLE statements, schema definitions, API signatures, configuration, and tabular data into fenced code blocks (or Markdown tables) in the source summary page instead of paraphrasing them. Exact column names, types, constraints, primary/foreign keys, and indexes must survive ingest — a prose-only summary that drops them loses the structure the user imported the source to keep.",
     "- Follow the analysis recommendations on what to emphasize",
@@ -3035,6 +3060,7 @@ function buildChunkMapSystemPrompt(
     "- Concepts mentioned",
     "- Any schema-defined page types beyond entity/concept that this chunk genuinely supports",
     "- Claims, findings, evidence, contradictions",
+    "- Exact structured data from this chunk, when present: preserve SQL DDL / CREATE TABLE statements, schema definitions, API signatures, configuration, and tables verbatim in fenced code blocks or Markdown tables; retain field names, types, constraints, keys, and indexes",
     "- Open questions or research gaps",
     "",
     "Stable project context follows. It changes rarely and should be treated as background:",
@@ -3323,6 +3349,7 @@ async function injectImagesIntoSourceSummary(
   sourceIdentity: string,
   sourceSummarySlug: string,
   savedImages: { relPath: string; page: number | null; sha256?: string }[],
+  outputLanguage?: string,
 ): Promise<void> {
   if (savedImages.length === 0) return
   const sourceSummaryPath = `wiki/sources/${sourceSummarySlug}.md`
@@ -3336,7 +3363,7 @@ async function injectImagesIntoSourceSummary(
     // indexes whatever's in the wiki page, so without this, search
     // by image content (e.g. "find the chart with revenue data")
     // never matches because alt text was empty.
-    const captionsBySha = await loadCaptionCache(pp)
+    const captionsBySha = await loadCaptionCache(pp, outputLanguage)
     const newSection = buildImageMarkdownSection(
       savedImages.map((img) => ({
         ...img,

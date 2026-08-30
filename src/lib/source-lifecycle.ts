@@ -307,14 +307,42 @@ export async function enqueueSourceIngest(
   return ids
 }
 
+export type SourceImportSkipReason =
+  | "unsupported-type"
+  | "excluded"
+  | "too-large"
+  | "unreadable"
+  | "copy-failed"
+  | "sensitive-config"
+
+export interface SkippedSourceImport {
+  name: string
+  reason: SourceImportSkipReason
+  detail?: string
+}
+
+export interface SourceImportResult {
+  imported: string[]
+  skipped: SkippedSourceImport[]
+}
+
+function formatMegabytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function errorDetail(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
 export async function importSourceFiles(
   project: WikiProject,
   sourcePaths: string[],
   llmConfig: LlmConfig,
   sourceWatchConfig?: SourceWatchConfig,
-): Promise<string[]> {
+): Promise<SourceImportResult> {
   const pp = normalizePath(project.path)
   const importedPaths: string[] = []
+  const skipped: SkippedSourceImport[] = []
   const cfg = normalizeSourceWatchConfig(sourceWatchConfig)
   // Explicit file selection is user intent, so the watcher's allow-list must
   // not silently reject a newly supported format from an older persisted
@@ -326,18 +354,29 @@ export async function importSourceFiles(
   for (const sourcePath of sourcePaths) {
     const originalName = getFileName(sourcePath) || "unknown"
     if (isSensitiveConfigSourceFile(sourcePath)) {
+      skipped.push({ name: originalName, reason: "sensitive-config" })
       continue
     }
-    let allowed = isIngestableSourcePath(sourcePath)
-      && isPathAllowedBySourceWatch(sourcePath, explicitImportConfig)
-    if (allowed) {
-      try {
-        allowed = await getFileSize(sourcePath) <= maxBytes
-      } catch {
-        allowed = false
-      }
+    // Exclusions first: a hidden or excluded file may still be a supported
+    // type, and "excluded" is the reason the user can act on.
+    if (!isPathAllowedBySourceWatch(sourcePath, explicitImportConfig)) {
+      skipped.push({ name: originalName, reason: "excluded" })
+      continue
     }
-    if (!allowed) continue
+    if (!isIngestableSourcePath(sourcePath)) {
+      skipped.push({ name: originalName, reason: "unsupported-type" })
+      continue
+    }
+    try {
+      const size = await getFileSize(sourcePath)
+      if (size > maxBytes) {
+        skipped.push({ name: originalName, reason: "too-large", detail: formatMegabytes(size) })
+        continue
+      }
+    } catch (err) {
+      skipped.push({ name: originalName, reason: "unreadable", detail: errorDetail(err) })
+      continue
+    }
 
     // Web: /upload already placed the file in raw/sources, so `sourcePath`
     // IS the destination — copying it again would create a "foo-1.pdf"
@@ -351,6 +390,7 @@ export async function importSourceFiles(
       importedPaths.push(destPath)
     } catch (err) {
       console.error(`Failed to import ${originalName}:`, err)
+      skipped.push({ name: originalName, reason: "copy-failed", detail: errorDetail(err) })
     }
   }
 
@@ -358,7 +398,7 @@ export async function importSourceFiles(
     parsingConcurrency: cfg.parsingConcurrency,
   })
 
-  return importedPaths
+  return { imported: importedPaths, skipped }
 }
 
 export async function importSourceFolder(
@@ -366,7 +406,7 @@ export async function importSourceFolder(
   selectedFolder: string,
   llmConfig: LlmConfig,
   sourceWatchConfig?: SourceWatchConfig,
-): Promise<string[]> {
+): Promise<SourceImportResult> {
   const pp = normalizePath(project.path)
   const sourceRoot = normalizePath(selectedFolder)
   if (isProjectScopedImport(pp, sourceRoot)) {
@@ -377,6 +417,7 @@ export async function importSourceFolder(
   const cfg = normalizeSourceWatchConfig(sourceWatchConfig)
   const maxBytes = cfg.maxFileSizeMb * 1024 * 1024
   const allowedFiles: string[] = []
+  const skipped: SkippedSourceImport[] = []
   // include hidden: a user importing a folder into raw/sources may
   // legitimately want dotfolder notes. Config-like files under known
   // agent/tool config folders are still filtered before copy so API
@@ -385,28 +426,54 @@ export async function importSourceFolder(
 
   for (const file of sourceFiles) {
     const relativeSourcePath = getRelativePath(file.path, sourceRoot)
+    const displayName = relativeSourcePath || file.name
     const destPath = `${destDir}/${relativeSourcePath}`
     const relPath = `raw/sources/${folderName}/${relativeSourcePath}`
     if (isSensitiveConfigSourceFile(file.path)) {
+      skipped.push({ name: displayName, reason: "sensitive-config" })
       continue
     }
-    // isPathAllowedBySourceWatch always allows media extensions (the watcher
-    // only enqueues), so the media toggles must be applied here too: this
-    // function copies, and un-ingestable media would be dead weight in
-    // raw/sources.
-    let allowed = isIngestableSourcePath(file.path) && isPathAllowedBySourceWatch(relPath, cfg)
-    if (allowed) {
-      try {
-        allowed = await getFileSize(file.path) <= maxBytes
-      } catch {
-        allowed = false
-      }
+    // `isPathAllowedBySourceWatch` lascia sempre passare le estensioni dei media
+    // (il watcher si limita ad accodare), quindi i loro interruttori vanno
+    // applicati anche qui: questa funzione **copia**, e un media che non si può
+    // ingerire resterebbe peso morto dentro `raw/sources`.
+    //
+    // Adesso lo scarto ha un motivo da riportare — è la struttura arrivata da
+    // monte con `fd9c953` — invece di sparire in un booleano.
+    if (!isPathAllowedBySourceWatch(relPath, cfg)) {
+      skipped.push({ name: displayName, reason: "excluded" })
+      continue
     }
-    if (!allowed) continue
-    const parent = parentPath(destPath)
-    if (parent) await createDirectory(parent)
-    await copyFile(file.path, destPath)
-    allowedFiles.push(destPath)
+    // ⚠️ Dopo, non prima. `isPathAllowedBySourceWatch` esclude già per tipo e
+    // per configurazione; mettendo questo controllo davanti, un `.py` usciva
+    // come "tipo non supportato" invece che "escluso" — motivo sbagliato per
+    // un file scartato giustamente. Qui restano solo i media, che quel filtro
+    // lascia sempre passare perché il watcher si limita ad accodare: ma questa
+    // funzione **copia**, e un media che non si può ingerire sarebbe peso morto
+    // dentro `raw/sources`.
+    if (!isIngestableSourcePath(file.path)) {
+      skipped.push({ name: displayName, reason: "unsupported-type" })
+      continue
+    }
+    try {
+      const size = await getFileSize(file.path)
+      if (size > maxBytes) {
+        skipped.push({ name: displayName, reason: "too-large", detail: formatMegabytes(size) })
+        continue
+      }
+    } catch (err) {
+      skipped.push({ name: displayName, reason: "unreadable", detail: errorDetail(err) })
+      continue
+    }
+    try {
+      const parent = parentPath(destPath)
+      if (parent) await createDirectory(parent)
+      await copyFile(file.path, destPath)
+      allowedFiles.push(destPath)
+    } catch (err) {
+      console.error(`Failed to import ${displayName}:`, err)
+      skipped.push({ name: displayName, reason: "copy-failed", detail: errorDetail(err) })
+    }
   }
 
   const naturallyOrderedFiles = [...allowedFiles].sort((a, b) =>
@@ -421,7 +488,7 @@ export async function importSourceFolder(
     })
   }
 
-  return naturallyOrderedFiles
+  return { imported: naturallyOrderedFiles, skipped }
 }
 
 export async function deleteSourceFile(

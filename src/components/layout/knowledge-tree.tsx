@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import {
   FileText, Users, Lightbulb, BookOpen, HelpCircle, GitMerge, BarChart3, TrendingUp, Target, ChevronRight, ChevronDown, Layout, Globe, Trash2,
 } from "lucide-react"
@@ -14,6 +14,10 @@ import { cascadeDeleteWikiPagesWithRefs } from "@/lib/wiki-page-delete"
 import { inferWikiTypeFromPath, wikiTypeLabel } from "@/lib/wiki-page-types"
 import { filterRawSourceTree } from "@/lib/source-filter"
 import { useTranslation } from "react-i18next"
+import { useAppDialog } from "@/stores/app-dialog-store"
+import { parseSources } from "@/lib/sources-merge"
+import { filterPagesBySource, listPageSourceIdentities } from "@/lib/knowledge-source-filter"
+import { flattenFilesNaturally } from "@/lib/file-tree-order"
 
 interface WikiPageInfo {
   path: string
@@ -21,6 +25,7 @@ interface WikiPageInfo {
   type: string
   tags: string[]
   origin?: string
+  sources: string[]
 }
 
 const TYPE_CONFIG: Record<string, { icon: typeof FileText; label: string; color: string; order: number }> = {
@@ -42,12 +47,14 @@ function typeConfig(type: string): { icon: typeof FileText; label: string; color
 
 export function KnowledgeTree() {
   const { t } = useTranslation()
+  const appDialog = useAppDialog()
   const project = useWikiStore((s) => s.project)
   const selectedFile = useWikiStore((s) => s.selectedFile)
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
   const openPathInPreview = useWikiStore((s) => s.openPathInPreview)
   const dataVersion = useWikiStore((s) => s.dataVersion)
   const [pages, setPages] = useState<WikiPageInfo[]>([])
+  const [selectedSource, setSelectedSource] = useState<string | null>(null)
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set(["overview", "entity", "concept", "source"]))
   // Two-stage delete: first click arms the row, second click executes.
   // Only one row armed at a time (clicking another row replaces).
@@ -95,6 +102,7 @@ export function KnowledgeTree() {
             title: file.name.replace(".md", "").replace(/-/g, " "),
             type: "other",
             tags: [],
+            sources: [],
           })
         }
       }
@@ -111,6 +119,20 @@ export function KnowledgeTree() {
   useEffect(() => {
     loadPages()
   }, [loadPages, dataVersion])
+
+  useEffect(() => {
+    setSelectedSource(null)
+  }, [project?.id])
+
+  const sourceOptions = useMemo(() => listPageSourceIdentities(pages), [pages])
+  const visiblePages = useMemo(
+    () => filterPagesBySource(pages, selectedSource),
+    [pages, selectedSource],
+  )
+
+  useEffect(() => {
+    if (selectedSource && !sourceOptions.includes(selectedSource)) setSelectedSource(null)
+  }, [selectedSource, sourceOptions])
 
   const handleDeleteClick = useCallback(
     async (pagePath: string) => {
@@ -138,12 +160,12 @@ export function KnowledgeTree() {
         if (selectedFile === pagePath) setSelectedFile(null)
       } catch (err) {
         console.error("[KnowledgeTree] delete failed:", err)
-        window.alert(`Failed to delete: ${err}`)
+        await appDialog.alert({ message: `Failed to delete: ${err}` })
       } finally {
         setDeletingPath(null)
       }
     },
-    [project, armedPath, loadPages, selectedFile, setSelectedFile],
+    [appDialog, project, armedPath, loadPages, selectedFile, setSelectedFile],
   )
 
   if (!project) {
@@ -156,7 +178,7 @@ export function KnowledgeTree() {
 
   // Group pages by type
   const grouped = new Map<string, WikiPageInfo[]>()
-  for (const page of pages) {
+  for (const page of visiblePages) {
     const list = grouped.get(page.type) ?? []
     list.push(page)
     grouped.set(page.type, list)
@@ -185,6 +207,25 @@ export function KnowledgeTree() {
         <div className="mb-2 px-2 text-xs font-semibold uppercase text-muted-foreground">
           {project.name}
         </div>
+
+        {sourceOptions.length > 1 && (
+          <div className="mb-2 px-2">
+            <label className="sr-only" htmlFor="knowledge-source-filter">
+              {t("sidebar.filterBySource")}
+            </label>
+            <select
+              id="knowledge-source-filter"
+              value={selectedSource ?? ""}
+              onChange={(event) => setSelectedSource(event.target.value || null)}
+              className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="">{t("sidebar.allSources")}</option>
+              {sourceOptions.map((source) => (
+                <option key={source} value={source}>{source}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {sortedGroups.length === 0 && (
           <div className="px-2 py-4 text-center text-xs text-muted-foreground">
@@ -279,11 +320,20 @@ function RawSourcesSection() {
   const [sources, setSources] = useState<FileNode[]>([])
 
   useEffect(() => {
+    setSources([])
     if (!project) return
+    let cancelled = false
     const pp = normalizePath(project.path)
     listDirectory(`${pp}/raw/sources`, true).then(filterRawSourceTree)
-      .then((tree) => setSources(flattenAllFiles(tree)))
-      .catch(() => setSources([]))
+      .then((tree) => {
+        if (!cancelled) setSources(flattenFilesNaturally(tree))
+      })
+      .catch(() => {
+        if (!cancelled) setSources([])
+      })
+    return () => {
+      cancelled = true
+    }
   }, [project])
 
   if (sources.length === 0) return null
@@ -363,7 +413,7 @@ function parsePageInfo(path: string, fileName: string, content: string): WikiPag
     type = inferWikiTypeFromPath(path, fileName) ?? "other"
   }
 
-  return { path, title, type, tags, origin }
+  return { path, title, type, tags, origin, sources: parseSources(content) }
 }
 
 /**
@@ -440,18 +490,6 @@ function flattenMdFiles(nodes: FileNode[]): FileNode[] {
     if (node.is_dir && node.children) {
       files.push(...flattenMdFiles(node.children))
     } else if (!node.is_dir && node.name.endsWith(".md")) {
-      files.push(node)
-    }
-  }
-  return files
-}
-
-function flattenAllFiles(nodes: FileNode[]): FileNode[] {
-  const files: FileNode[] = []
-  for (const node of nodes) {
-    if (node.is_dir && node.children) {
-      files.push(...flattenAllFiles(node.children))
-    } else if (!node.is_dir) {
       files.push(node)
     }
   }

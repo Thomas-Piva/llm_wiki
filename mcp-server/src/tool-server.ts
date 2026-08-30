@@ -149,6 +149,24 @@ const LLM_WIKI_TOOLS = [
     },
   },
   {
+    // Arrivato con `5427eb5` da monte: indicizza una singola pagina già scritta.
+    // Copre esattamente il buco per cui abbiamo messo l'unità systemd — una
+    // pagina in `wiki/` non entrava nell'indice se non ricostruendo tutto — ma
+    // passa dall'API dell'app, quindi vale dove l'app gira.
+    name: "llm_wiki_embed_page",
+    description: "Create or replace the vector index for one existing Markdown page under a project's wiki/ directory.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_id: { type: "string", description: "Project UUID, project path, or 'current'. Defaults to current." },
+        path: { type: "string", description: "Project-relative Markdown path, for example wiki/ideas/example.md." },
+        force: { type: "boolean", description: "Force rebuilding vectors even when the page content and embedding configuration are unchanged." },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "llm_wiki_rescan_sources",
     description: "Trigger the desktop app's source folder rescan for a project, using the user's Source Watch rules.",
     inputSchema: {
@@ -310,6 +328,13 @@ export function createToolServer(): Server {
                 formatVaultGraph(g, numberArg(args.limit) ?? 200),
             )
           }
+        }
+        case "llm_wiki_embed_page": {
+          await assertMcpEnabled(client)
+          const percorso = stringArg(args.path, "path")
+          const scope = await resolveProjectScope(client, projectBinding, args)
+          const esito = await client.embedPage(percorso, scope.id, boolArg(args.force, false))
+          return textResult(withActiveProject(JSON.stringify(esito, null, 2), scope.project, scope.id))
         }
         case "llm_wiki_rescan_sources": {
           await assertMcpEnabled(client)

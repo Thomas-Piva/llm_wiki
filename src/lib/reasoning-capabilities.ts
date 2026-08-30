@@ -69,6 +69,17 @@ function supportsOpenAiEffortNone(config: LlmConfig): boolean {
   return /^gpt-(?:[5-9]|\d{2,})(?:[.\-_]|$)/.test(config.model.trim().toLowerCase())
 }
 
+/** Riconosce l'endpoint OpenRouter dal nome host. Arrivata da monte con
+ *  `57c5576`: le due funzioni rispondono a domande diverse e servono entrambe. */
+export function isOpenRouterEndpoint(endpoint: string): boolean {
+  try {
+    const hostname = new URL(endpoint).hostname.toLowerCase()
+    return hostname === "openrouter.ai" || hostname.endsWith(".openrouter.ai")
+  } catch {
+    return false
+  }
+}
+
 /**
  * Resolve only capabilities that are part of the selected wire contract.
  * Generic custom gateways deliberately stay Auto-only: a vendor-looking
@@ -100,6 +111,7 @@ export function resolveReasoningCapabilities(config: LlmConfig): ReasoningCapabi
   }
   if (config.provider === "custom") {
     const endpoint = config.customEndpoint.toLowerCase()
+    if (isOpenRouterEndpoint(endpoint)) return capabilities(BUDGET_LEVELS)
     if (/api\.deepseek\.(?:com|cn)(?:[:/]|$)/.test(endpoint)) {
       return capabilities(DEEPSEEK_LEVELS)
     }
@@ -140,6 +152,10 @@ export function normalizeReasoningForProvider(
  * disabling reasoning outright with a 400 and every ingest call fails. Making
  * it settable is what lets any provider be used; "off" stays the default so
  * existing setups behave exactly as before.
+ *
+ * Keep this helper provider-agnostic: the provider layer normalizes the saved
+ * value once when it builds the wire payload, stale settings left by a provider
+ * or model change included.
  */
 export function resolveIngestReasoning(config: LlmConfig): ReasoningConfig {
   // Deliberately NOT normalized here: the provider layer already normalizes
