@@ -306,6 +306,31 @@ export async function invoke<T = unknown>(cmd: string, args: any = {}): Promise<
       const contenuto = isWikiPage(args.path)
         ? ensureIdentity(args.contents, { newId: nuovoIdPagina })
         : args.contents
+      // `write_file_atomic` qui scriveva come `write_file`: stesso ramo, stessa
+      // `writeFile` diretta. Il nome prometteva una garanzia che headless non
+      // c'era — e chi lo chiamava (la cache delle didascalie) si e' trovato il
+      // file troncato a meta' scrittura con dodici lavoratori in parallelo:
+      //
+      //   [caption-cache] corrupt cache at .llm-wiki/image-caption-cache.json,
+      //   starting empty: JSON Parse error
+      //
+      // Il risultato non era un errore ma uno spreco silenzioso: cache azzerata,
+      // ogni immagine ridescritta da capo, e il conto all'API pagato due volte.
+      // File temporaneo + fsync + rename: un kill a meta' lascia intera la
+      // versione precedente invece di una troncata. E' la stessa cura gia'
+      // applicata alla coda di ingest a luglio, per lo stesso identico guasto.
+      if (cmd === "write_file_atomic") {
+        const tmp = `${args.path}.tmp-${process.pid}-${Date.now()}`
+        const fh = await fs.open(tmp, "w")
+        try {
+          await fh.writeFile(contenuto, "utf8")
+          await fh.sync()
+        } finally {
+          await fh.close()
+        }
+        await fs.rename(tmp, args.path)
+        return undefined as T
+      }
       await fs.writeFile(args.path, contenuto, "utf8")
       return undefined as T
     }

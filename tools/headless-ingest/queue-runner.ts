@@ -14,6 +14,7 @@ import { autoIngest, TRANSCRIPT_MISSING } from "@/lib/ingest"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { type IngestTask, readQueue, writeQueue } from "./queue-store"
 import { indexPagesNative } from "./index-pages"
+import { vectorCompact } from "./vector-store"
 
 /** Recordings: the only inputs gated by a daily transcription allowance. */
 const MEDIA_EXTENSIONS = /\.(mp3|m4a|wav|ogg|flac|aac|wma|mp4|mov|mkv|avi|webm|m4v)$/i
@@ -231,5 +232,21 @@ export async function runQueueOnce(opts: RunOptions): Promise<RunReport> {
   })
 
   await writeChain
+
+  // La compattazione va QUI e non dentro `indexPagesNative`: la coda e' finita,
+  // nessuno sta piu' appendendo, e la transazione di rewrite non ha con chi
+  // litigare. Dentro il ciclo falliva sistematicamente (7.051 su 7.051); fuori
+  // riesce al primo tentativo. E' anche il punto in cui `vectorCompact` crea
+  // l'indice ANN se la tabella ha passato la soglia.
+  if (report.done > 0) {
+    try {
+      const r = await vectorCompact(opts.project)
+      if (r) console.error(`[queue] compattazione: ${r.fileRimossi} file rimossi · indice ${r.indice}`)
+    } catch (err) {
+      // Un indice frammentato rende la ricerca lenta, non sbagliata: non e' una
+      // ragione per far fallire una passata che ha appena scritto i documenti.
+      console.warn(`[queue] compattazione fallita: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
   return report
 }

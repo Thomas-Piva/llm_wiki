@@ -21,7 +21,12 @@ vi.mock("@/lib/vision-caption", () => ({
 
 vi.mock("@/commands/fs", () => ({
   readFile: (p: string) => mockReadFile(p),
+  // La cache passa da `writeFileAtomic`, non da `writeFile`: con dodici
+  // documenti in lavorazione insieme il file si troncava a meta' scrittura e
+  // ripartiva vuoto in silenzio. Il finto sta su entrambe perche' il test
+  // verifica COSA viene scritto, non con quale delle due.
   writeFile: (p: string, c: string) => mockWriteFile(p, c),
+  writeFileAtomic: (p: string, c: string) => mockWriteFile(p, c),
   fileExists: (p: string) => mockFileExists(p),
   createDirectory: (p: string) => mockCreateDir(p),
   readFileAsBase64: (p: string) => mockReadBase64(p),

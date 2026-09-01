@@ -25,12 +25,13 @@
  */
 import { promises as fs } from "node:fs"
 import { readFileSync } from "node:fs"
+import { cpus } from "node:os"
 import { join, relative } from "node:path"
 
 import { createAsyncLimiter, embedPage, isDerivedPage } from "@/lib/embedding"
 import { useWikiStore } from "@/stores/wiki-store"
 import { loadHeadlessConfig } from "./config"
-import { vectorCompact } from "./vector-store"
+import { vectorCompact, vectorPageIds } from "./vector-store"
 
 interface BackfillState {
   /** pageIds already indexed. The whole point of the file. */
@@ -137,12 +138,49 @@ async function waitForQuiet(ceiling: number, deadline: number): Promise<boolean>
   return true
 }
 
+/**
+ * Il tetto sul carico va misurato in **core**, non in numero assoluto.
+ *
+ * Era cablato a `1.5`, tarato sui due core del box della cliente, dove significa
+ * «mezzo core impegnato: aspetta, c'e' WhatsApp che deve rispondere». Giusto la'.
+ * Su una macchina da 24 core lo stesso 1.5 vale il **6%** del ferro: la passata
+ * si blocca appena qualcuno apre un browser, e lo fa in silenzio — stampa
+ * `carico X > 1.5: attendo` all'infinito e sembra un lavoro lento invece di un
+ * lavoro fermo.
+ *
+ * Costato: un'indicizzazione ferma per ore a `carico 1.72 > 1.5` su un portatile
+ * praticamente scarico, dopo che la coda era gia' stata svuotata.
+ *
+ * 0,75 per core mantiene **identico** il comportamento dove serviva (2 core →
+ * 1,5, lo stesso numero di prima) e lo rende sensato dove non lo era.
+ */
+export function tettoCaricoPredefinito(cores = cpus().length): number {
+  return Math.max(1.5, cores * 0.75)
+}
+
+/**
+ * I `page_id` che l'indice contiene gia'. Ritorna un insieme vuoto — mai
+ * un'eccezione — se l'indice non c'e' o non si legge: senza questa lettura il
+ * backfill rifa' del lavoro, il che e' spreco; fallendo qui non ne farebbe
+ * nessuno, il che e' un guasto. Fra i due, lo spreco.
+ */
+export async function pagineGiaIndicizzate(vault: string): Promise<Set<string>> {
+  try {
+    const ids = await vectorPageIds(vault)
+    if (ids.size > 0) console.error(`[backfill] gia' nell'indice: ${ids.size} pagine`)
+    return ids
+  } catch (err) {
+    console.error(`[backfill] indice non leggibile (${err instanceof Error ? err.message : err}) — proseguo col solo file di stato`)
+    return new Set()
+  }
+}
+
 async function main() {
   const vault = arg("--project") ?? process.env.HEADLESS_PROJECT
   if (!vault) throw new Error("serve --project <percorso del vault>")
 
   const maxMinutes = Number(arg("--max-minutes") ?? "0")
-  const loadCeiling = Number(arg("--max-load") ?? "1.5")
+  const loadCeiling = Number(arg("--max-load") ?? String(tettoCaricoPredefinito()))
   const saveEvery = Number(arg("--save-every") ?? "20")
   // 250: abbastanza raro da non pesare, abbastanza spesso da non far
   // accumulare i frammenti che rendono quadratica la scrittura
@@ -182,6 +220,21 @@ async function main() {
   const scartate = tutte.length - pages.length
   const state = await readState(vault)
   const done = new Set(state.done)
+  // ⭐ La verita' su cosa e' gia' indicizzato sta nell'INDICE, non in questo
+  // file di stato. `embed-backfill.json` ricorda solo cio' che ha fatto QUESTO
+  // strumento; l'ingest normale indicizza ogni documento appena lo scrive
+  // (`indexPagesNative`) e non annota niente qui. Risultato: dopo un ingest il
+  // backfill crede di avere tutto da rifare.
+  //
+  // Misurato dopo una passata vera: **7.911 pagine "da fare", di cui 7.910 gia'
+  // nell'indice** — sette ore di riscritture identiche. La prova che erano
+  // identiche: 55 pagine reindicizzate in 100 secondi e il conteggio righe
+  // fermo a 360.521, invariato.
+  //
+  // Una lettura sola dei page_id all'avvio (secondi su 360k righe) rende il
+  // file di stato un'ottimizzazione invece che l'unica fonte, e il lavoro
+  // doppio sparisce.
+  for (const id of await pagineGiaIndicizzate(vault)) done.add(id)
   let todo = pages.filter((p) => !done.has(p.pageId))
   let rimandate = 0
   if (maxKb > 0) {

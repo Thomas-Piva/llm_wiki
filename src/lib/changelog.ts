@@ -29,6 +29,39 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.2.1",
+    date: "2026-09-01",
+    highlights: {
+      en: [
+        "HEIC and HEIF photos — everything an iPhone takes — are captioned and indexed instead of being thrown away. They were listed as images but no mime table knew the extension, so captioning failed and the binary guard discarded the document: 240 files in one vault, lost without an error. They are now converted to JPEG just before the model sees them, using sips on macOS (no install needed) or libheif/ImageMagick elsewhere. A machine with no converter behaves exactly as before.",
+        "The MCP tools now say which one to use, not just what they do. Six of them come in pairs doing the same verb — search, list, read, graph — and none said when to defer to its twin, so a model picking between them was guessing.",
+        "Compaction of the vector index moved to the end of an ingest run. Inside the loop it competed with the twelve writers feeding it and lost every time: 7,051 attempts, 0 successes, leaving 3,624 unmerged data files. Once outside, it succeeds on the first try — 1.4 GB down to 995 MB in 26 seconds.",
+        "The re-indexing pass asks the index what it already holds instead of trusting its own state file, which knew nothing about pages indexed by the ingest itself. It was redoing 7,910 pages out of 7,911: about seven hours of identical rewrites.",
+        "The image caption cache is written atomically. With twelve documents in flight it was being truncated mid-write, and a corrupt cache silently starts empty — every image re-described, and the API bill paid twice.",
+        "A source already queued from the app is no longer queued a second time by the command-line scan: they used different id formats, and a fifth of one real queue was duplicates.",
+        "The re-indexing load ceiling scales with the machine's cores. It was pinned at 1.5 — right for a 2-core box running WhatsApp, 6% of a 24-core laptop, where it stalled the job in silence.",
+      ],
+      it: [
+        "Le foto HEIC e HEIF — tutto quello che scatta un iPhone — vengono descritte e indicizzate invece di essere buttate. Erano elencate fra le immagini ma nessuna tabella dei mime conosceva l'estensione: la didascalia falliva e la guardia sul binario scartava il documento. In un vault erano 240 file, persi senza un errore. Ora si convertono in JPEG appena prima del modello, con sips su macOS (niente da installare) o libheif/ImageMagick altrove. Una macchina senza convertitore si comporta esattamente come prima.",
+        "I tool MCP dicono quale usare, non solo cosa fanno. Sei di loro sono coppie che fanno lo stesso verbo — cercare, elencare, leggere, il grafo — e nessuno diceva quando cedere il passo all'altro: la scelta era un sorteggio.",
+        "La compattazione dell'indice si fa a fine passata. Dentro il ciclo contendeva la tabella ai dodici lavoratori che la riempivano, e perdeva sempre: 7.051 tentativi, 0 riusciti, 3.624 file di dati mai uniti. Spostata fuori, riesce al primo colpo — da 1,4 GB a 995 MB in 26 secondi.",
+        "La reindicizzazione chiede all'indice cosa contiene già invece di fidarsi del proprio file di stato, che non sapeva nulla delle pagine indicizzate dall'ingest stesso. Rifaceva 7.910 pagine su 7.911: circa sette ore di riscritture identiche.",
+        "La cache delle didascalie si scrive in modo atomico. Con dodici documenti in lavorazione si troncava a metà, e una cache corrotta riparte vuota in silenzio: ogni immagine ridescritta e il conto all'API pagato due volte.",
+        "Una fonte già in coda dall'applicazione non viene più riaccodata dalla scansione da riga di comando: usavano due formati di id diversi, e un quinto di una coda vera erano doppioni.",
+        "Il tetto sul carico della reindicizzazione segue i core della macchina. Era fisso a 1,5 — giusto su un box da 2 core che fa girare WhatsApp, il 6% di un portatile da 24, dove bloccava il lavoro in silenzio.",
+      ],
+      zh: [
+        "HEIC/HEIF 照片现在会被描述并编入索引，而不是被丢弃。",
+        "MCP 工具现在会说明该用哪一个，而不只是它们做什么。",
+        "向量索引的压缩移到了摄取流程结束时执行：循环内 7,051 次尝试全部失败。",
+        "重新索引会向索引本身询问已有内容，而不是只信任自己的状态文件。",
+        "图片描述缓存改为原子写入，避免写入中途被截断。",
+        "已在队列中的来源不会被命令行扫描重复加入。",
+        "重新索引的负载上限现在随机器核心数缩放。",
+      ],
+    },
+  },
+  {
     version: "1.2.0",
     date: "2026-08-30",
     highlights: {

@@ -37,7 +37,7 @@
  * restarts — no migration story needed when the embedding-side
  * schema changes. If we ever cache 100k+ images we'll revisit.
  */
-import { writeFile, readFile, createDirectory, fileExists, readFileAsBase64 } from "@/commands/fs"
+import { writeFileAtomic, readFile, createDirectory, fileExists, readFileAsBase64 } from "@/commands/fs"
 import { captionImage } from "@/lib/vision-caption"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { normalizePath } from "@/lib/path-utils"
@@ -147,7 +147,14 @@ async function writeCache(projectPath: string, cache: CaptionCache): Promise<voi
   // Pretty-print at 2 spaces. Cache files end up in user backups
   // and source control sometimes; readability outweighs the small
   // size penalty.
-  await writeFile(cachePath, JSON.stringify(cache, null, 2))
+  //
+  // ATOMICA, non una writeFile qualunque: con dodici documenti in lavorazione
+  // insieme questo file si e' trovato troncato a meta' scrittura, e il lettore
+  // se ne accorge solo quando il JSON non si parsa piu':
+  //   [caption-cache] corrupt cache ... starting empty: JSON Parse error
+  // Ripartire da vuoto non da' errore — ridescrive ogni immagine e ripaga
+  // l'API. Il danno e' invisibile finche' non si guarda la fattura.
+  await writeFileAtomic(cachePath, JSON.stringify(cache, null, 2))
 }
 
 /**

@@ -34,7 +34,6 @@ import {
   type ChiamaModello,
 } from "./entity-extract"
 import { splitFrontmatter } from "./note-policy"
-import { vectorCompact } from "./vector-store"
 
 /** `wiki/sources/foo.md` → `sources/foo`. Restituisce null fuori da `wiki/`. */
 export function pageIdFor(relPath: string): string | null {
@@ -204,15 +203,21 @@ export async function indexPagesNative(vault: string, relPaths: string[]): Promi
     }
   }
 
-  if (indexed > 0) {
-    // Senza `cleanupOlderThan` la compattazione non tocca lo storico delle
-    // versioni, ed è lì che sta il peso: misurato 3,3 GB su 12.402 manifest
-    // contro 84 MB di dati. Con la pulizia: 3,31 GB → 0,03 GB.
-    try {
-      await vectorCompact(vault)
-    } catch (err) {
-      console.warn(`[index] compattazione: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
+  // ⛔ QUI NON SI COMPATTA. La compattazione riscrive i dati, e questa funzione
+  // gira una volta per documento: con dodici lavoratori in parallelo significa
+  // dodici riscritture che si contendono la stessa tabella mentre le altre
+  // undici ci stanno appendendo righe. LanceDB risolve il conflitto sempre allo
+  // stesso modo — la transazione di rewrite perde:
+  //
+  //   [index] compattazione: Retryable commit conflict ... Rewrite transaction
+  //   [index] compattazione: Not found: .../data/<file>          ← rimosso da un'altra
+  //
+  // Misurato su una passata vera: **7.051 tentativi, 0 riusciti**, e nessuno di
+  // quegli errori ferma l'ingest, quindi il difetto non si vede. Si vede dopo,
+  // nell'indice: 3.624 file di dati non uniti al posto di poche decine.
+  //
+  // Appena la coda si e' svuotata la stessa compattazione e' riuscita al primo
+  // colpo, in 26 secondi, 1,4 GB → 995 MB. Il posto giusto e' li': a fine
+  // passata, quando nessuno scrive piu'. Lo fa `runQueueOnce`.
   return indexed
 }

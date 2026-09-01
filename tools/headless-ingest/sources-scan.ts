@@ -47,13 +47,21 @@ export async function enqueueSources(project: string): Promise<number> {
 
   const existing = await readQueue(project)
   const knownIds = new Set(existing.map((t) => t.id))
+  // Anche per PERCORSO, non solo per id. L'id qui e' derivato (`src:<path>`),
+  // ma le voci create dall'interfaccia hanno id propri — `ingest-1787662678762-7r4fey`
+  // — e per quelle il confronto sugli id non trova niente: lo stesso file
+  // rientrava in coda una seconda volta e veniva rilavorato.
+  // Misurato sulla coda vera: **225 doppioni su 1.087 voci preesistenti**, un
+  // quinto. Non da' errore, costa solo tempo e chiamate — che e' il motivo per
+  // cui e' passato inosservato.
+  const knownPaths = new Set(existing.map((t) => t.sourcePath))
   const now = Date.now()
 
   const additions: IngestTask[] = []
   for (const abs of files) {
     const sourcePath = join(SOURCES_REL, relative(sourcesRoot, abs))
     const id = `src:${sourcePath}`
-    if (knownIds.has(id)) continue
+    if (knownIds.has(id) || knownPaths.has(sourcePath)) continue
     additions.push({
       id,
       projectId: "headless",

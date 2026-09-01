@@ -299,6 +299,27 @@ export async function vectorCountChunks(vault: string): Promise<number> {
   return tbl ? tbl.countRows() : 0
 }
 
+/**
+ * I `page_id` distinti presenti nell'indice.
+ *
+ * Serve a rispondere alla sola domanda che conta prima di reindicizzare —
+ * «questa pagina c'e' gia'?» — chiedendola all'indice invece che a un file di
+ * stato che puo' non sapere di scritture fatte da un altro percorso. Su una
+ * tabella da 360.521 righe la lettura della sola colonna `page_id` costa
+ * qualche secondo: una volta per passata, contro le ore che fa risparmiare.
+ */
+export async function vectorPageIds(vault: string): Promise<Set<string>> {
+  const tbl = await openTable(vault)
+  if (!tbl) return new Set()
+  const righe = await tbl.query().select(["page_id"]).toArray()
+  const out = new Set<string>()
+  for (const r of righe) {
+    const id = (r as Record<string, unknown>).page_id
+    if (typeof id === "string") out.add(id)
+  }
+  return out
+}
+
 export function vectorClearChunks(vault: string): Promise<void> {
   return serialize(vault, async () => {
     const db = await connect(vault)
