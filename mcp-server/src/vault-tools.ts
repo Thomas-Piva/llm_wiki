@@ -53,7 +53,7 @@ export const VAULT_TOOLS: Tool[] = [
   },
   {
     name: "vault_read_note",
-    description: "Read the raw content (including frontmatter) of a markdown note at a vault-relative path. If the note embeds images and the user wants to see them, the ![](media/...) targets are real files — resolve them against the vault root and pass them to vault_read_image. To reach the document the note was built from, use vault_open_source.",
+    description: "Read a note's raw content, frontmatter included, at a vault-relative path. Use this as the default way to open any note: it reads the disk directly, so it works on every path and does not need the backend running (llm_wiki_read_file goes through the app's API and only exposes public paths). If the note embeds images and the user wants to see them, the ![](media/...) targets are real files — resolve them against the vault root and pass them to vault_read_image. To reach the document the note was built from, use vault_open_source.",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string", description: "Vault-relative path, e.g. entities/clienti/mbm-edilizia.md" } },
@@ -64,7 +64,7 @@ export const VAULT_TOOLS: Tool[] = [
   {
     name: "vault_list_notes",
     description:
-      "LOOKING FOR AN IMAGE? Call this with kind:\"images\" — that is the only way to get a real image path, and vault_read_image needs an exact one. Do not guess paths from what a note references: image files sit in folders no markdown listing shows, so a guessed path returns nothing and the vault looks empty when it is not. " +
+      "The default way to see what the vault contains — it reads the disk, so it works when the backend does not (llm_wiki_files is the app's API view of the same tree). LOOKING FOR AN IMAGE? Call this with kind:\"images\" — that is the only way to get a real image path, and vault_read_image needs an exact one. Do not guess paths from what a note references: image files sit in folders no markdown listing shows, so a guessed path returns nothing and the vault looks empty when it is not. " +
       "IT RETURNS PATHS, NOT PICTURES: when the user asked to see, show, or list images, follow up with vault_read_image on each one — a list of filenames is not what they asked for. " +
       "Extracted figures (the ones with generated captions) live under wiki/media; raw/sources holds the untouched originals. " +
       "Otherwise: lists markdown note paths under a folder, or the whole vault if omitted.",
@@ -97,7 +97,7 @@ export const VAULT_TOOLS: Tool[] = [
   },
   {
     name: "vault_write_note",
-    description: "Overwrite an existing note's full content at a vault-relative path. To create a NEW entry about a topic, use vault_create_missing_page instead: it grounds the page in what the vault already contains and links only to pages that exist, while this tool writes exactly what you give it — so any [[link]] you invent here lands as a broken one. Call vault_get_conventions first: the vault enforces a frontmatter schema, folder purposes, and a minimum of outgoing wikilinks.",
+    description: "Write a file at an exact vault-relative path you already have — a journal or session note, a dated file, anything whose location and filename were dictated to you by a convention, a skill, or the user. Creates the file if it does not exist and overwrites it if it does. This is the right tool whenever the path is already decided. It is the WRONG tool when you are asked for an entry about a topic and nobody gave you a path: there, vault_create_missing_page picks the location, checks whether the page already exists, and grounds the content in what the vault holds — this tool writes exactly what you hand it, so any [[link]] you invent here lands broken. Call vault_get_conventions first: the vault enforces a frontmatter schema, folder purposes, and a minimum of outgoing wikilinks.",
     inputSchema: {
       type: "object",
       properties: {
@@ -111,7 +111,7 @@ export const VAULT_TOOLS: Tool[] = [
   {
     name: "vault_graph",
     description:
-      "Read the vault's [[wikilink]] graph straight from disk: every page with its REAL vault-relative path, its outgoing links, the links that point at nothing, and the pages nobody cites. Call this before writing a [[link]] — it tells you the exact page id to use instead of guessing a path, and lists the missing targets you may want to create with vault_create_missing_page.",
+      "Use this for anything about [[wikilinks]] — it reads them straight from the markdown, so the ids it returns are the ones that actually resolve (llm_wiki_graph returns the backend's computed knowledge graph instead, typed nodes rather than links). Read the vault's [[wikilink]] graph straight from disk: every page with its REAL vault-relative path, its outgoing links, the links that point at nothing, and the pages nobody cites. Call this before writing a [[link]] — it tells you the exact page id to use instead of guessing a path, and lists the missing targets you may want to create with vault_create_missing_page.",
     inputSchema: {
       type: "object",
       properties: {
@@ -124,7 +124,7 @@ export const VAULT_TOOLS: Tool[] = [
   {
     name: "vault_create_missing_page",
     description:
-      "THE way to create a new page in the vault — use this whenever asked to create, add or write an entry about a topic, and for the page a dangling [[wikilink]] points to. Do not hand-write a new page with vault_write_note: this tool first asks the semantic index which existing pages are about this title, so the entry is grounded in what the vault actually holds and its [[links]] point only at pages that exist, instead of being guessed. APPEND-ONLY: if a page with that name already exists anywhere in the vault it is left untouched and the existing path is returned — this tool never overwrites, merges or deletes. The new page gets the vault's frontmatter plus a stable id and an aliases list, so a later merge or rename cannot break inbound links.",
+      "Create a new page ABOUT A TOPIC, letting the vault choose where it goes — use this whenever you are asked to create, add or write an entry on a subject and nobody handed you a path, and for the page a dangling [[wikilink]] points to. It derives the filename from the title and puts it in the right folder, so do NOT use it when the path is already decided by a convention, a skill or the user (a journal or session note, a dated file): that is vault_write_note, which writes exactly where you say. Here, instead, the tool first asks the semantic index which existing pages are about this title, so the entry is grounded in what the vault actually holds and its [[links]] point only at pages that exist, instead of being guessed. APPEND-ONLY: if a page with that name already exists anywhere in the vault it is left untouched and the existing path is returned — this tool never overwrites, merges or deletes. The new page gets the vault's frontmatter plus a stable id and an aliases list, so a later merge or rename cannot break inbound links.",
     inputSchema: {
       type: "object",
       properties: {
@@ -147,7 +147,7 @@ export const VAULT_TOOLS: Tool[] = [
   },
   {
     name: "vault_append_note",
-    description: "Append text to the end of a markdown note, creating it if it doesn't exist. Call vault_get_conventions first if the note doesn't exist yet — new notes still need the vault's frontmatter schema.",
+    description: "Add lines to the END of a note without touching what is already there — use it for logs, running lists, and any note that grows by accumulation, where vault_write_note would replace the whole file and lose the history. Creates the note if it does not exist. Call vault_get_conventions first if the note doesn't exist yet — new notes still need the vault's frontmatter schema.",
     inputSchema: {
       type: "object",
       properties: {
@@ -161,7 +161,7 @@ export const VAULT_TOOLS: Tool[] = [
   {
     name: "vault_read_image",
     description:
-      "Read an image from the vault. Returns it inline AND as a signed HTTPS link, because clients differ: some render MCP image content, others (ChatGPT among them) only render a markdown image URL. Large images are downscaled first — a 2752x1536 figure goes from 6,835 KB to 346 KB and reads identically, since a model downsamples it anyway. The link is HMAC-signed, expires within the hour, and grants read of that one image only.",
+      "Use this whenever the user wants to SEE a picture from the vault — a photo, a figure, a scan, a diagram — and whenever a note you just read embeds one worth showing. It needs an exact path: get it from vault_list_notes with kind:\"images\", never by guessing from what a note mentions. Returns the image inline AND as a signed HTTPS link, because clients differ: some render MCP image content, others (ChatGPT among them) only render a markdown image URL. Large images are downscaled first — a 2752x1536 figure goes from 6,835 KB to 346 KB and reads identically, since a model downsamples it anyway. The link is HMAC-signed, expires within the hour, and grants read of that one image only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -174,7 +174,7 @@ export const VAULT_TOOLS: Tool[] = [
   {
     name: "vault_open_source",
     description:
-      "Get back to the original a note was built from. Notes keep the path of the file they came from, but the file itself is not on disk — keeping hundreds of GB of originals next to the vault was never possible. Given the note, this mints a temporary Dropbox download link from that path, or points at the local copy when one exists.",
+      "Use this when the note is not enough and the user needs the ORIGINAL document — the PDF, the spreadsheet, the recording the page was written from — to read it in full, download it, or check what the summary left out. Gets back to the original a note was built from. Notes keep the path of the file they came from, but the file itself is not on disk — keeping hundreds of GB of originals next to the vault was never possible. Given the note, this mints a temporary Dropbox download link from that path, or points at the local copy when one exists.",
     inputSchema: {
       type: "object",
       properties: {

@@ -25,7 +25,7 @@ const MAX_TEXT_BYTES = 120_000
 const LLM_WIKI_TOOLS = [
   {
     name: "llm_wiki_status",
-    description: "Check whether the LLM Wiki desktop local API is reachable and list the current project.",
+    description: "Check that the LLM Wiki backend is reachable and see which project is active. Call this ONLY when another llm_wiki_* tool has just failed and you need to know whether the backend is down or the project is wrong. It says nothing about the notes themselves — the vault_* tools read the vault straight from disk and keep working even when this reports the backend unavailable.",
     inputSchema: {
       type: "object" as const,
       properties: {},
@@ -34,7 +34,7 @@ const LLM_WIKI_TOOLS = [
   },
   {
     name: "llm_wiki_projects",
-    description: "List known LLM Wiki projects. The response includes currentProject when the desktop app has an active project.",
+    description: "List the LLM Wiki projects the backend knows about, with currentProject when one is active. Use it only to discover a project id to pass to llm_wiki_set_project. For anything about the CONTENT of the vault, use the vault_* tools.",
     inputSchema: {
       type: "object" as const,
       properties: {},
@@ -43,7 +43,7 @@ const LLM_WIKI_TOOLS = [
   },
   {
     name: "llm_wiki_set_project",
-    description: "Pin this MCP process session to one LLM Wiki project. Once pinned, project tools cannot access another project until this tool changes the binding.",
+    description: "Pin this session to one LLM Wiki project, when the vault holds several and you must be explicit about which. Rarely needed: every llm_wiki_* tool defaults to the current project. Once pinned, the other tools cannot reach a different project until this one changes it.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -55,7 +55,7 @@ const LLM_WIKI_TOOLS = [
   },
   {
     name: "llm_wiki_files",
-    description: "List files from a project using the desktop app's API permissions. project_id may be a UUID, filesystem path, or 'current'.",
+    description: "List a project's files through the backend API. PREFER vault_list_notes: it reads the disk directly, works when the backend is down, and is the only way to get real image paths (kind:\"images\"). Reach for this one only when you specifically need the backend's own view — its permissions, or the sources/ tree as the app sees it.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -69,7 +69,7 @@ const LLM_WIKI_TOOLS = [
   },
   {
     name: "llm_wiki_read_file",
-    description: "Read a text file from a project through the desktop app API. Only public project paths such as wiki/ and raw/sources/ are allowed by the API.",
+    description: "Read a file through the backend API, which exposes only public paths such as wiki/ and raw/sources/. PREFER vault_read_note: same content, read from disk, no backend required, and it works on every path in the vault. Use this one when you deliberately want the API's view or its path restrictions.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -82,7 +82,7 @@ const LLM_WIKI_TOOLS = [
   },
   {
     name: "llm_wiki_reviews",
-    description: "List Review tab items from a project. Defaults to unresolved items so agent clients can help manage pending wiki review work.",
+    description: "List the vault's open Review items — pages the system flagged as missing, duplicated, contradictory, or needing confirmation. This is the tool for \"what needs my attention in the vault\", \"what is left to check\", \"what did the wiki flag\". Nothing else surfaces this queue: it lives in the backend, not in the markdown.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -95,8 +95,22 @@ const LLM_WIKI_TOOLS = [
     },
   },
   {
+    name: "llm_wiki_resolve_review",
+    description: "Close one or more Review items once you have actually dealt with them. IMPORTANT: this only marks them resolved (with an optional label) — it does NOT create pages, add wikilinks, or do anything else the app's UI does when you click a review option. If a review asks for a new page, create it FIRST with vault_create_missing_page, then close the item here. Get the ids from llm_wiki_reviews.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_id: { type: "string", description: "Project UUID, project path, or 'current'. Defaults to current." },
+        ids: { type: "array", items: { type: "string" }, description: "Review item ids to resolve (from llm_wiki_reviews output). Required, non-empty." },
+        action: { type: "string", description: "Optional label to store on the resolved items, e.g. 'Create Page' or 'Skip'. Purely informational — does not trigger the labeled action." },
+      },
+      required: ["ids"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "llm_wiki_search",
-    description: "Search a project using the same backend keyword/vector retrieval used by the desktop API.",
+    description: "SEARCH BY MEANING — the default way to find anything in the vault when you do not already know the path. It retrieves passages whose sense matches the question even when they share no word with it, which is what makes \"where did I write about X\" work at all. Use it FIRST for any question about the vault's content, then vault_read_note on the paths worth opening. Only fall back to vault_search_notes when you need a literal string: an exact filename, an error message, a code identifier.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -111,7 +125,7 @@ const LLM_WIKI_TOOLS = [
   },
   {
     name: "llm_wiki_chat",
-    description: "Ask the LLM Wiki backend Agent a question about a project. This initial backend Agent uses the desktop API's shared retrieval service and returns references.",
+    description: "Ask the vault's own agent a question and get a written ANSWER with references, instead of a list of passages to read yourself. Use it for questions that need several notes combined (\"summarise what we decided about X\", \"what do I know about this client\"). When you want the raw material to reason over yourself, use llm_wiki_search — it is cheaper and puts you in control of the synthesis.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -136,7 +150,7 @@ const LLM_WIKI_TOOLS = [
   },
   {
     name: "llm_wiki_graph",
-    description: "Query the project knowledge graph through the desktop app API.",
+    description: "Query the knowledge graph as the backend computes it: typed nodes, filterable by text and node type. For [[wikilink]] work — which page links where, which links point at nothing, which pages nobody cites — use vault_graph instead: it reads the links straight from the markdown and returns the exact page ids you need to write a link that resolves.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -154,7 +168,7 @@ const LLM_WIKI_TOOLS = [
     // pagina in `wiki/` non entrava nell'indice se non ricostruendo tutto — ma
     // passa dall'API dell'app, quindi vale dove l'app gira.
     name: "llm_wiki_embed_page",
-    description: "Create or replace the vector index for one existing Markdown page under a project's wiki/ directory.",
+    description: "Re-index ONE page into the semantic index, when a page exists on disk but llm_wiki_search cannot find it — typically a note written outside the app, or one whose content changed without the app noticing. Not needed after vault_write_note or vault_create_missing_page in a running system: those already trigger indexing. Use force only when the content is unchanged but you suspect the vectors are stale.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -168,7 +182,7 @@ const LLM_WIKI_TOOLS = [
   },
   {
     name: "llm_wiki_rescan_sources",
-    description: "Trigger the desktop app's source folder rescan for a project, using the user's Source Watch rules.",
+    description: "Tell the app to walk the source folders again and queue anything new for ingestion, following the user's Source Watch rules. This is what you call after dropping new documents into raw/sources — it does not read or write notes, it starts the pipeline that turns those documents into pages. It returns as soon as the scan is queued, not when the ingestion is finished.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -272,6 +286,20 @@ export function createToolServer(): Server {
             limit: numberArg(args.limit),
           })
           return textResult(withActiveProject(formatReviews(reviews), scope.project, scope.id))
+        }
+        case "llm_wiki_resolve_review": {
+          await assertMcpEnabled(client)
+          const ids = stringArrayArg(args.ids)
+          if (!ids || ids.length === 0) {
+            throw new McpError(ErrorCode.InvalidParams, "ids is required and must be a non-empty array of review item ids")
+          }
+          const scope = await resolveProjectScope(client, projectBinding, args)
+          const result = await client.resolveReviews(scope.id, ids, optionalStringArg(args.action))
+          const lines = [
+            `Resolved ${result.resolved.length}/${ids.length} review item(s).`,
+            result.notFound.length > 0 ? `Not found: ${result.notFound.join(", ")}` : "",
+          ].filter(Boolean)
+          return textResult(withActiveProject(lines.join("\n"), scope.project, scope.id))
         }
         case "llm_wiki_search": {
           await assertMcpEnabled(client)

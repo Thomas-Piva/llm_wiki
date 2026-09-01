@@ -239,6 +239,32 @@ export class LlmWikiApiClient {
     }
   }
 
+  /**
+   * Chiude una o piu' voci della coda Review.
+   *
+   * ⚠️ Recuperata dal box di Thomas, dove viveva **solo come JavaScript
+   * compilato**: era stata scritta, deployata e mai committata. E' la terza
+   * volta che succede su questo server (image-url, la persistenza OAuth, e ora
+   * questa), e il modo in cui te ne accorgi e' sempre lo stesso: stai per
+   * sovrascrivere il box col repo e il diff ti mostra un pezzo che il repo non
+   * ha. Da qui la regola: **prima il diff, poi la copia.**
+   */
+  async resolveReviews(
+    projectId = "current",
+    ids: string[],
+    action?: string,
+  ): Promise<{ resolved: string[]; notFound: string[]; count: number }> {
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/reviews/resolve`, {
+      method: "POST",
+      body: action ? { ids, action } : { ids },
+    })
+    return {
+      resolved: Array.isArray(json.resolved) ? json.resolved.filter((x): x is string => typeof x === "string") : [],
+      notFound: Array.isArray(json.notFound) ? json.notFound.filter((x): x is string => typeof x === "string") : [],
+      count: numberOrUndefined(json.count) ?? 0,
+    }
+  }
+
   async search(projectId = "current", query: string, options: { topK?: number; includeContent?: boolean } = {}): Promise<ApiSearchResponse> {
     const json = await this.request(`/projects/${encodeURIComponent(projectId)}/search`, {
       method: "POST",
