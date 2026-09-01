@@ -1933,18 +1933,150 @@ pub struct FileBase64 {
     pub mime_type: String,
 }
 
+/// HEIC/HEIF — il formato di ogni foto scattata con un iPhone.
+///
+/// Sta in `IMAGE_EXTS` accanto a png e jpg, quindi l'ingest lo tratta da
+/// immagine e prova a farne la didascalia. Ma la tabella dei mime qui sotto non
+/// lo conosceva: partiva come `application/octet-stream`, nessun modello di
+/// visione accetta quei byte, la didascalia falliva e a valle la guardia sul
+/// binario buttava il documento. Misurato sul vault di una cliente: **2 su 2**
+/// nel campione di prova, 240 file cosi' nelle cartelle da ingerire. Tutte foto,
+/// tutte perse in silenzio.
+///
+/// Il rimedio e' convertirlo in JPEG appena prima di darlo al modello. Il file
+/// sorgente non si tocca: la conversione vive in un temporaneo e muore li'.
+///
+/// **Ordine dei convertitori, e perche'**: su macOS `sips` c'e' di serie — HEIC
+/// e' il formato di Apple — quindi li' funziona senza che l'utente installi
+/// niente. Altrove servono `heif-convert` (libheif) o ImageMagick. Su Windows
+/// non c'e' nessun convertitore di sistema da riga di comando: senza uno dei
+/// due installati si ricade nel comportamento precedente.
+///
+/// Il ritorno e' `Option` e non `Result` apposta: **una macchina senza
+/// convertitore non deve peggiorare**. Niente convertitore = niente didascalia,
+/// esattamente come prima, non un errore nuovo.
+const HEIC_EXTS: &[&str] = &["heic", "heif"];
+
+fn suppress_windows_console(_cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        _cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
+/// Esegue il convertitore con una scadenza. Senza, un convertitore che si pianta
+/// su un file malformato blocca per sempre il posto che occupa nella coda — e'
+/// lo stesso guasto che `pdftotext` ha gia' fatto pagare dieci ore e mezza di
+/// corsa notturna, sulla stessa pipeline.
+/// `None` = il binario non c'e'. `Some(false)` = c'e' e ha rifiutato il file.
+/// La distinzione non e' pedanteria: separa «installa libheif» da «questo file
+/// e' rotto», che sono due diagnosi opposte. Un messaggio che le confonde manda
+/// a cercare nel posto sbagliato — e' gia' successo su questa pipeline con
+/// «nessun parser disponibile» detto di file che il parser ce l'avevano.
+fn run_converter(mut cmd: std::process::Command, timeout: Duration) -> Option<bool> {
+    use std::process::Stdio;
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    suppress_windows_console(&mut cmd);
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => return None, // binario assente: si prova il prossimo
+    };
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status.success()),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Some(false);
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return Some(false),
+        }
+    }
+}
+
+fn heic_to_jpeg(path: &str) -> Option<Vec<u8>> {
+    let out = std::env::temp_dir().join(format!("llmwiki-heic-{}.jpg", uuid::Uuid::new_v4()));
+    let out_s = out.to_string_lossy().to_string();
+
+    let mut candidati: Vec<(&str, Vec<String>)> = Vec::new();
+    #[cfg(target_os = "macos")]
+    candidati.push((
+        "sips",
+        vec![
+            "-s".into(),
+            "format".into(),
+            "jpeg".into(),
+            path.to_string(),
+            "--out".into(),
+            out_s.clone(),
+        ],
+    ));
+    candidati.push((
+        "heif-convert",
+        vec!["-q".into(), "90".into(), path.to_string(), out_s.clone()],
+    ));
+    candidati.push(("magick", vec![path.to_string(), out_s.clone()]));
+    candidati.push(("convert", vec![path.to_string(), out_s.clone()]));
+
+    let nome = Path::new(path)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let mut provati = 0usize;
+    for (bin, args) in candidati {
+        let mut cmd = std::process::Command::new(bin);
+        cmd.args(&args);
+        match run_converter(cmd, Duration::from_secs(60)) {
+            None => continue,          // binario assente
+            Some(false) => {
+                provati += 1;
+                continue;
+            }
+            Some(true) => provati += 1,
+        }
+        if let Ok(bytes) = fs::read(&out) {
+            let _ = fs::remove_file(&out);
+            if !bytes.is_empty() {
+                return Some(bytes);
+            }
+        }
+    }
+    let _ = fs::remove_file(&out);
+    if provati == 0 {
+        eprintln!("[heic] nessun convertitore installato (sips/heif-convert/ImageMagick) — \"{nome}\" senza didascalia");
+    } else {
+        eprintln!("[heic] {provati} convertitore/i hanno rifiutato \"{nome}\" — file rotto o codec HEVC mancante");
+    }
+    None
+}
+
 #[tauri::command]
 pub async fn read_file_as_base64(path: String) -> Result<FileBase64, String> {
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("read_file_as_base64", || {
-            let bytes = fs::read(&path).map_err(|e| format!("Failed to read '{}': {}", path, e))?;
             let p = Path::new(&path);
             let ext = p
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
                 .to_ascii_lowercase();
+            if HEIC_EXTS.contains(&ext.as_str()) {
+                if let Some(jpeg) = heic_to_jpeg(&path) {
+                    return Ok(FileBase64 {
+                        base64: B64.encode(&jpeg),
+                        mime_type: "image/jpeg".to_string(),
+                    });
+                }
+            }
+            let bytes = fs::read(&path).map_err(|e| format!("Failed to read '{}': {}", path, e))?;
             let mime_type = match ext.as_str() {
                 "png" => "image/png",
                 "jpg" | "jpeg" => "image/jpeg",

@@ -176,6 +176,66 @@ function runTool(bin: string, argv: string[], timeoutMs = 5 * 60_000): Promise<s
   })
 }
 
+/**
+ * HEIC/HEIF — il formato di ogni foto scattata con un iPhone.
+ *
+ * Sta in `IMAGE_SOURCE_EXTENSIONS` come gli altri, quindi l'ingest lo tratta da
+ * immagine e prova a farne la didascalia. Ma nessun modello di visione accetta
+ * `image/heic`, e la tabella dei mime qui sopra non lo conosce: partiva come
+ * `application/octet-stream`, la didascalia falliva, e a valle la guardia sul
+ * binario buttava il documento. Misurato: **2 su 2** nel campione di prova, e
+ * 240 file così nelle cartelle da ingerire — foto, tutte perse in silenzio.
+ *
+ * Rimedio: convertirlo in JPEG appena prima di darlo al modello. Non tocca il
+ * file sorgente — il vault resta com'è.
+ *
+ * Se nessuno dei due convertitori è installato si torna al comportamento
+ * precedente: **una macchina senza libheif non peggiora**, la didascalia salta
+ * come faceva prima. Da qui il ritorno `null` invece di un'eccezione.
+ */
+const HEIC_EXTS = new Set([".heic", ".heif"])
+
+async function heicToJpeg(path: string): Promise<Buffer | null> {
+  const out = join(tmpdir(), `heic-${createHash("sha1").update(path).digest("hex").slice(0, 12)}.jpg`)
+  // `heif-convert` (libheif) è il decodificatore dedicato; ImageMagick è il
+  // ripiego perché c'è già su molte macchine. Ordine: il più specifico prima.
+  const tentativi: Array<[string, string[]]> = [
+    ["heif-convert", ["-q", "90", path, out]],
+    ["magick", [path, out]],
+    ["convert", [path, out]],
+  ]
+  // Distinguere "il convertitore non c'e'" da "c'e' e ha rifiutato il file" e'
+  // la differenza fra "installa libheif" e "questo file e' rotto": due diagnosi
+  // opposte. Un messaggio che le confonde manda a cercare nel posto sbagliato —
+  // e' gia' successo con «nessun parser disponibile» su file che il parser
+  // ce l'avevano eccome.
+  let provati = 0
+  for (const [bin, argv] of tentativi) {
+    const esito = await new Promise<"ok" | "fallito" | "assente">((resolve) => {
+      const child = spawn(bin, argv, { stdio: "ignore" })
+      const timer = setTimeout(() => { child.kill("SIGKILL"); resolve("fallito") }, 60_000)
+      child.on("error", () => { clearTimeout(timer); resolve("assente") })
+      child.on("close", (code) => { clearTimeout(timer); resolve(code === 0 ? "ok" : "fallito") })
+    })
+    if (esito === "assente") continue
+    provati++
+    if (esito === "fallito") continue
+    try {
+      const buf = await fs.readFile(out)
+      await fs.unlink(out).catch(() => {})
+      if (buf.length > 0) return buf
+    } catch {
+      /* il convertitore ha detto ok ma non ha scritto: si prova il prossimo */
+    }
+  }
+  console.warn(
+    provati === 0
+      ? `[heic] nessun convertitore installato (heif-convert o ImageMagick) — "${basename(path)}" senza didascalia`
+      : `[heic] ${provati} convertitore/i hanno rifiutato "${basename(path)}" — file rotto o codec HEVC mancante nella libheif installata`,
+  )
+  return null
+}
+
 /** Dispatch a Tauri command name to its Node equivalent. */
 export async function invoke<T = unknown>(cmd: string, args: any = {}): Promise<T> {
   switch (cmd) {
@@ -228,8 +288,13 @@ export async function invoke<T = unknown>(cmd: string, args: any = {}): Promise<
     }
 
     case "read_file_as_base64": {
+      const ext = extname(String(args.path)).toLowerCase()
+      if (HEIC_EXTS.has(ext)) {
+        const jpeg = await heicToJpeg(String(args.path))
+        if (jpeg) return { base64: jpeg.toString("base64"), mimeType: "image/jpeg" } as T
+      }
       const buf = await fs.readFile(args.path)
-      const mimeType = MIME_BY_EXT[extname(args.path).toLowerCase()] ?? "application/octet-stream"
+      const mimeType = MIME_BY_EXT[ext] ?? "application/octet-stream"
       return { base64: buf.toString("base64"), mimeType } as T
     }
 
