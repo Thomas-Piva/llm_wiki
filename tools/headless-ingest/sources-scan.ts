@@ -21,6 +21,27 @@ function folderContextFor(relFromSources: string): string {
   return dir.split("/").join(" > ")
 }
 
+/**
+ * I percorsi gia' ingeriti secondo `file-snapshot.json` (le sue chiavi SONO i
+ * sourcePath). Serve al caso che la sola coda non copre: un vault migrato
+ * dall'interfaccia, dove i task portano id `ingest-<ts>` e i file sono gia'
+ * stati lavorati — senza questo, una riscansione completa li rimetterebbe
+ * tutti in lavorazione.
+ *
+ * ⚠️ Recuperata dal box della cliente, dove esisteva gia' e non era mai stata
+ * committata. E' la quarta volta su questo progetto: il difetto (d) qui sotto
+ * era stato risolto la' e non nel repo, quindi il portatile — che gira sul
+ * repo — se lo e' ripreso pari pari, 225 doppioni.
+ */
+async function ingestedPaths(project: string): Promise<Set<string>> {
+  try {
+    const raw = await fs.readFile(join(project, ".llm-wiki", "file-snapshot.json"), "utf8")
+    return new Set(Object.keys(JSON.parse(raw)?.files ?? {}))
+  } catch {
+    return new Set()
+  }
+}
+
 async function walkFiles(dir: string, acc: string[]): Promise<void> {
   let entries: Awaited<ReturnType<typeof fs.readdir>>
   try {
@@ -55,13 +76,14 @@ export async function enqueueSources(project: string): Promise<number> {
   // quinto. Non da' errore, costa solo tempo e chiamate — che e' il motivo per
   // cui e' passato inosservato.
   const knownPaths = new Set(existing.map((t) => t.sourcePath))
+  const ingested = await ingestedPaths(project)
   const now = Date.now()
 
   const additions: IngestTask[] = []
   for (const abs of files) {
     const sourcePath = join(SOURCES_REL, relative(sourcesRoot, abs))
     const id = `src:${sourcePath}`
-    if (knownIds.has(id) || knownPaths.has(sourcePath)) continue
+    if (knownIds.has(id) || knownPaths.has(sourcePath) || ingested.has(sourcePath)) continue
     additions.push({
       id,
       projectId: "headless",
