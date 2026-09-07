@@ -177,6 +177,71 @@ function runTool(bin: string, argv: string[], timeoutMs = 5 * 60_000): Promise<s
 }
 
 /**
+ * Un PDF digitale ha il testo dentro; una scansione no. La soglia e' la stessa
+ * che usa `pdfTextLooksExtracted` in ingest.ts — **caratteri per pagina**, non
+ * totali, perche' una scansione da 468 pagine che ne produce 802 e' comunque
+ * una scansione, e sul totale passerebbe per un documento corto.
+ */
+const MIN_CARATTERI_PER_PAGINA = 50
+
+function bastaCosi(testo: string): boolean {
+  const utili = testo.replace(/\s/g, "").length
+  if (utili < 20) return false
+  const pagine = (testo.match(/\f/g)?.length ?? 0) + 1   // pdftotext separa le pagine con \f
+  return utili / pagine >= MIN_CARATTERI_PER_PAGINA
+}
+
+/** Oltre questo, l'OCR di un solo documento monopolizzerebbe il suo posto in coda. */
+const OCR_PAGINE_MAX = 60
+
+/**
+ * OCR in locale, prima di ricorrere a quello a pagamento.
+ *
+ * Perche' esiste, coi numeri di una passata vera sull'archivio di una cliente:
+ * **12.693 PDF scansionati** (atti di causa, estratti conto, perizie: fotocopie,
+ * dentro non c'e' testo da copiare). Mandandoli tutti a MinerU la coda andava a
+ * **quindici invii in settanta minuti** — un documento ogni cinque — con dodici
+ * lavoratori fermi ad aspettare la rete: dieci giorni di lavoro.
+ *
+ * Misurato qui, stesso file: 10 pagine, 22.455 caratteri, **5,8 s a pagina** su
+ * un core. Sembra peggio e invece e' meglio, per due ragioni: e' CPU locale,
+ * quindi i dodici lavoratori lavorano *davvero in parallelo* invece di
+ * accodarsi allo stesso servizio remoto; e non costa niente.
+ *
+ * `pdftoppm` e `tesseract` arrivano dallo stesso ambiente micromamba di
+ * `pdftotext`. Se mancano, la funzione torna stringa vuota e il chiamante
+ * ricade su MinerU esattamente come prima: **una macchina senza OCR locale non
+ * peggiora**.
+ */
+async function ocrLocale(pdf: string): Promise<string> {
+  const dir = join(tmpdir(), `ocr-${createHash("sha1").update(pdf).digest("hex").slice(0, 12)}-${process.pid}`)
+  try {
+    await fs.mkdir(dir, { recursive: true })
+    // Rasterizza a 200 dpi: sotto, tesseract sbaglia le lettere; sopra, il
+    // tempo cresce senza che l'accuratezza segua.
+    await runTool("pdftoppm", ["-r", "200", "-png", "-f", "1", "-l", String(OCR_PAGINE_MAX), pdf, join(dir, "p")], 10 * 60_000)
+    const pagine = (await fs.readdir(dir)).filter((n) => n.endsWith(".png")).sort()
+    if (pagine.length === 0) return ""
+    const pezzi: string[] = []
+    for (const p of pagine) {
+      // `-` manda il testo su stdout; `ita` e' la lingua dei documenti di
+      // questo archivio. Due minuti a pagina sono un tetto larghissimo:
+      // servono per non lasciare un posto in coda occupato da una pagina rotta.
+      pezzi.push(await runTool("tesseract", [join(dir, p), "-", "-l", "ita"], 2 * 60_000))
+    }
+    const testo = pezzi.join("\f")
+    if (testo.replace(/\s/g, "").length < 20) return ""
+    console.error(`[ocr] "${basename(pdf)}": ${pagine.length} pagine, ${testo.length} caratteri — in locale, senza MinerU`)
+    return testo
+  } catch (err) {
+    console.warn(`[ocr] "${basename(pdf)}" non riuscito (${err instanceof Error ? err.message : err}) — ripiego su MinerU`)
+    return ""
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+/**
  * HEIC/HEIF — il formato di ogni foto scattata con un iPhone.
  *
  * Sta in `IMAGE_SOURCE_EXTENSIONS` come gli altri, quindi l'ingest lo tratta da
@@ -250,7 +315,12 @@ export async function invoke<T = unknown>(cmd: string, args: any = {}): Promise<
      * return "" and the caller falls back to MinerU.
      */
     case "pdf_extract_text": {
-      return (await runTool("pdftotext", ["-layout", "-enc", "UTF-8", String(args.path), "-"])) as T
+      const testo = await runTool("pdftotext", ["-layout", "-enc", "UTF-8", String(args.path), "-"])
+      if (bastaCosi(testo)) return testo as T
+      // Niente testo dentro: e' una scansione. Prima di mandarla a un OCR a
+      // pagamento, si prova quello locale — vedi `ocrLocale`.
+      const ocr = await ocrLocale(String(args.path))
+      return (ocr || testo) as T
     }
     case "read_file": {
       // Mirror the Rust `read_file`: prefer a sibling `.cache/<name>.txt`
