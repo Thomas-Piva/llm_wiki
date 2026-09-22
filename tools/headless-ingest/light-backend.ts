@@ -10,7 +10,8 @@
  *   VAULT=/home/claude/headless-vps PORT=19829 \
  *     bun ./tools/headless-ingest/light-backend.ts
  *
- * Optional bearer auth: set LIGHT_BACKEND_TOKEN and send `Authorization: Bearer`.
+ * Optional bearer auth: set LIGHT_BACKEND_TOKEN (or LLM_WIKI_API_TOKEN) and
+ * send `Authorization: Bearer <token>`. LIGHT_BACKEND_TOKEN takes precedence.
  */
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -31,7 +32,16 @@ const execFileAsync = promisify(execFile)
 const VAULT = resolve(process.env.VAULT ?? process.cwd())
 const WIKI = join(VAULT, "wiki")
 const PORT = Number(process.env.PORT ?? "19829")
-const TOKEN = process.env.LIGHT_BACKEND_TOKEN ?? ""
+const LIGHT_TOKEN = process.env.LIGHT_BACKEND_TOKEN ?? ""
+const API_TOKEN = process.env.LLM_WIKI_API_TOKEN ?? ""
+const TOKEN = LIGHT_TOKEN || API_TOKEN
+
+if (LIGHT_TOKEN && API_TOKEN && LIGHT_TOKEN !== API_TOKEN) {
+  console.error(
+    "[light-backend] WARNING: LIGHT_BACKEND_TOKEN and LLM_WIKI_API_TOKEN are both set but different — " +
+    "token mismatch will cause 401 errors. Using LIGHT_BACKEND_TOKEN.",
+  )
+}
 // Self-contained browser UI (client-side render; the VPS only serves data).
 const UI_HTML = await readFile(join(import.meta.dir, "ui", "index.html"), "utf8").catch(() => "")
 

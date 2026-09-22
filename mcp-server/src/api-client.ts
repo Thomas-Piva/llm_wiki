@@ -187,6 +187,8 @@ export class LlmWikiApiClient {
 
   constructor(options: LlmWikiApiClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? process.env.LLM_WIKI_API_BASE_URL)
+    // LLM_WIKI_API_TOKEN is the MCP-side env var name.
+    // The light-backend accepts both this and LIGHT_BACKEND_TOKEN (its native name).
     this.token = options.token ?? process.env.LLM_WIKI_API_TOKEN
     this.fetchImpl = options.fetchImpl ?? fetch
   }

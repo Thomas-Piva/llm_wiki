@@ -10,3 +10,16 @@ describe("light-backend", () => {
     expect(hasReadFileInside).toBe(false)
   })
 })
+
+describe("token verification", () => {
+  it("reads from both LIGHT_BACKEND_TOKEN and LLM_WIKI_API_TOKEN", async () => {
+    const src = await Bun.file("tools/headless-ingest/light-backend.ts").text()
+    expect(src).toContain("LIGHT_BACKEND_TOKEN")
+    expect(src).toContain("LLM_WIKI_API_TOKEN")
+  })
+
+  it("warns at startup when both are set but different", async () => {
+    const src = await Bun.file("tools/headless-ingest/light-backend.ts").text()
+    expect(src).toContain("token mismatch")
+  })
+})
