@@ -198,7 +198,8 @@ const LINK_RE = /\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g
 
 // Cache the batch so repeated graph opens cost the VPS ~0: build once, serve
 // cached for TTL. The heavy force-layout runs in the browser, not here.
-const GRAPH_TTL_MS = 120_000
+const GRAPH_TTL_MS = 15 * 60 * 1000 // 15 min — was 2 min, caused 10-100 MB I/O burst every 120s
+const GRAPH_FILE_READ_CONCURRENCY = 16 // same as desktop (wiki-graph.ts:33)
 const graphCache = new Map<string, { ts: number; data: unknown }>()
 
 /** Read every wiki page ONCE, server-side, and return the graph node data
@@ -207,17 +208,30 @@ const graphCache = new Map<string, { ts: number; data: unknown }>()
 async function wikiGraphBatch(vault: string) {
   const cached = graphCache.get(vault)
   if (cached && Date.now() - cached.ts < GRAPH_TTL_MS) return cached.data
+
   const wiki = join(vault, "wiki")
-  const out: Array<{ id: string; label: string; type: string; path: string; links: string[] }> = []
-  const walk = async (dir: string) => {
+  const mdFiles: string[] = []
+
+  // Phase 1: collect paths (cheap — readdir only, no file reads)
+  const collectPaths = async (dir: string) => {
     let es: Awaited<ReturnType<typeof fs.readdir>>
     try { es = await fs.readdir(dir, { withFileTypes: true }) } catch { return }
     for (const e of es) {
       if (e.name.startsWith(".")) continue
       const full = join(dir, e.name)
-      if (e.isDirectory()) { await walk(full); continue }
-      if (!e.name.endsWith(".md")) continue
+      if (e.isDirectory()) { await collectPaths(full); continue }
+      if (e.name.endsWith(".md")) mdFiles.push(full)
+    }
+  }
+  await collectPaths(wiki)
+
+  // Phase 2: read files with concurrency limit
+  const out: Array<{ id: string; label: string; type: string; path: string; links: string[]; tags: string[] }> = []
+  for (let i = 0; i < mdFiles.length; i += GRAPH_FILE_READ_CONCURRENCY) {
+    const batch = mdFiles.slice(i, i + GRAPH_FILE_READ_CONCURRENCY)
+    const results = await Promise.all(batch.map(async (full) => {
       const content = await fs.readFile(full, "utf8").catch(() => "")
+      const name = full.split("/").pop()!
       const fm = /^---\n([\s\S]*?)\n---/.exec(content)
       let type = "other"
       const tags: string[] = []
@@ -229,10 +243,11 @@ async function wikiGraphBatch(vault: string) {
       }
       const links: string[] = []
       for (const m of content.matchAll(LINK_RE)) links.push(m[1].trim())
-      out.push({ id: e.name.replace(/\.md$/, ""), label: titleFrom(content, full), type, path: full, links, tags })
-    }
+      return { id: name.replace(/\.md$/, ""), label: titleFrom(content, full), type, path: full, links, tags }
+    }))
+    out.push(...results)
   }
-  await walk(wiki)
+
   graphCache.set(vault, { ts: Date.now(), data: out })
   return out
 }

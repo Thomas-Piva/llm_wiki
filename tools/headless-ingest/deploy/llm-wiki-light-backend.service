@@ -15,7 +15,7 @@ Restart=on-failure
 RestartSec=3
 
 # Light by design: ripgrep bursts, otherwise idle. Keep a modest ceiling.
-MemoryMax=256M
+MemoryMax=512M
 Nice=5
 
 [Install]

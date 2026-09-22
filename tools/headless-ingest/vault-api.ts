@@ -32,6 +32,16 @@ export interface ApiReply {
   body: unknown
 }
 
+// ── file list cache (mtime-based invalidation) ──────────────────────────────
+
+interface FileListCacheEntry {
+  readonly data: readonly any[]
+  readonly mtime: number
+  readonly ts: number
+}
+const fileListCache = new Map<string, FileListCacheEntry>()
+const FILE_LIST_CACHE_TTL_MS = 30_000
+
 // ── helpers ────────────────────────────────────────────────────────────────
 
 export function titleFrom(content: string, path: string): string {
@@ -72,6 +82,21 @@ async function walk(
     out.push(node)
   }
   return out
+}
+
+async function cachedFileList(vault: string, root: string, recursive: boolean, cap: { n: number; max: number }): Promise<readonly any[]> {
+  const key = `${vault}:${root}:${recursive}`
+  const cached = fileListCache.get(key)
+  const vaultStat = await stat(vault).catch(() => null)
+  const currentMtime = vaultStat?.mtimeMs ?? 0
+
+  if (cached && cached.mtime === currentMtime && Date.now() - cached.ts < FILE_LIST_CACHE_TTL_MS) {
+    return cached.data
+  }
+
+  const data = await walk(join(vault, root), vault, recursive, cap)
+  fileListCache.set(key, { data, mtime: currentMtime, ts: Date.now() })
+  return data
 }
 
 /** ripgrep, literal + case-insensitive; rank files by match count. */
@@ -398,7 +423,7 @@ export async function handleVaultApi(
     const roots = root === "all" ? ["wiki", "raw/sources"] : [root === "sources" ? "raw/sources" : "wiki"]
     const cap = { n: 0, max }
     const files: any[] = []
-    for (const r of roots) files.push(...(await walk(join(ctx.vault, r), ctx.vault, recursive, cap)))
+    for (const r of roots) files.push(...(await cachedFileList(ctx.vault, r, recursive, cap)))
     return { status: 200, body: { files, truncated: cap.n >= max } }
   }
   if (action === "search") {

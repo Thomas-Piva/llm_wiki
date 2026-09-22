@@ -15,6 +15,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises"
+import { readFileSync } from "node:fs"
 import { resolve, join, sep, basename } from "node:path"
 import { createHash, timingSafeEqual } from "node:crypto"
 import { handleVaultApi } from "./vault-api"
@@ -39,13 +40,18 @@ const UI_HTML = await readFile(join(import.meta.dir, "ui", "index.html"), "utf8"
 const PROJECT_NAME = basename(VAULT)
 const UI_ZOOM = process.env.UI_ZOOM ?? "1" // 1 = native size (no zoom); override via UI_ZOOM env
 const UI_BOOT = `<style>html{zoom:${UI_ZOOM}}</style>`
-// Read + patch index.html fresh on every request so a `npm run build:web`
-// goes live WITHOUT restarting this (CLI-armed) service — the served index
-// always matches the on-disk bundle's hashed asset names. Settings live
-// server-side in app-state.json (via /store), so we only inject the UI zoom.
-async function appIndexHtml(): Promise<string> {
-  const raw = await readFile(join(DIST, "index.html"), "utf8").catch(() => "")
-  return raw ? raw.replace("</head>", `${UI_BOOT}</head>`) : raw
+// Read once at startup — no more disk I/O per request
+const APP_INDEX_HTML = (() => {
+  try {
+    const raw = readFileSync(join(DIST, "index.html"), "utf8")
+    return raw.replace("</head>", `${UI_BOOT}</head>`)
+  } catch {
+    return ""
+  }
+})()
+
+function appIndexHtml(): string {
+  return APP_INDEX_HTML
 }
 
 function json(body: unknown, status = 200): Response {
