@@ -160,6 +160,38 @@ pub async fn preprocess_file(path: String) -> Result<String, String> {
     .map_err(|e| format!("preprocess_file blocking task join error: {e}"))?
 }
 
+/// Plain-text PDF extraction for the ingest fast path.
+///
+/// Returns the raw text layer with `\f` (form feed) between pages,
+/// matching pdftotext output. Scanned PDFs come back near-empty and the
+/// caller falls through to MinerU.
+#[tauri::command]
+pub async fn pdf_extract_text(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_guarded("pdf_extract_text", || {
+            let _lock = lock_pdfium();
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&path, None)
+                .map_err(|e| format!("Failed to open PDF '{}': {e}", path))?;
+
+            let mut text = String::new();
+            for (i, page) in doc.pages().iter().enumerate() {
+                if i > 0 {
+                    text.push('\x0C');
+                }
+                let page_text = page
+                    .text()
+                    .map_err(|e| format!("Page {} text extraction failed: {e}", i + 1))?;
+                text.push_str(&page_text.all());
+            }
+            Ok(text)
+        })
+    })
+    .await
+    .map_err(|e| format!("pdf_extract_text blocking task join error: {e}"))?
+}
+
 fn cache_path_for(original: &Path) -> std::path::PathBuf {
     let parent = original.parent().unwrap_or(Path::new("."));
     let cache_dir = parent.join(".cache");

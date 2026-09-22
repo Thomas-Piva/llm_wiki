@@ -643,6 +643,7 @@ pub fn run() {
             commands::fs::copy_file,
             commands::fs::copy_directory,
             commands::fs::preprocess_file,
+            commands::fs::pdf_extract_text,
             commands::fs::delete_file,
             commands::fs::find_related_wiki_pages,
             commands::fs::create_directory,
