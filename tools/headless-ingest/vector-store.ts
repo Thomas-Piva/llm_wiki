@@ -308,14 +308,31 @@ export async function vectorCountChunks(vault: string): Promise<number> {
  * tabella da 360.521 righe la lettura della sola colonna `page_id` costa
  * qualche secondo: una volta per passata, contro le ore che fa risparmiare.
  */
+/**
+ * I `page_id` già presenti nell'indice, a lotti.
+ *
+ * ⚠️ `toArray()` qui era una bomba a orologeria: materializza TUTTE le righe in
+ * un array JS prima che si possa leggerne una. Misurato sul vault della
+ * cliente a 2,6 milioni di righe: il processo chiedeva **7,9 GB** e veniva
+ * ucciso — e siccome questa funzione gira all'AVVIO di ogni passata, ripartiva
+ * e rimoriva in anello, con zero pagine di avanzamento. Il costo non stava nei
+ * `page_id` (un Set di 42.000 stringhe sono pochi MB) ma nei 2,6 milioni di
+ * oggetti intermedi buttati via subito dopo.
+ *
+ * Scorrendo a lotti la memoria resta piatta: in RAM sta un lotto per volta più
+ * il Set finale.
+ */
 export async function vectorPageIds(vault: string): Promise<Set<string>> {
   const tbl = await openTable(vault)
   if (!tbl) return new Set()
-  const righe = await tbl.query().select(["page_id"]).toArray()
   const out = new Set<string>()
-  for (const r of righe) {
-    const id = (r as Record<string, unknown>).page_id
-    if (typeof id === "string") out.add(id)
+  for await (const lotto of tbl.query().select(["page_id"])) {
+    const colonna = lotto.getChild("page_id")
+    if (!colonna) continue
+    for (let i = 0; i < colonna.length; i++) {
+      const id = colonna.get(i)
+      if (typeof id === "string") out.add(id)
+    }
   }
   return out
 }

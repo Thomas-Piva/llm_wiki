@@ -271,6 +271,8 @@ async function main() {
 
   const limita = createAsyncLimiter(concorrenza)
   const grandeKb = Number(arg("--warn-kb") ?? "200")
+  /** Oltre questa soglia si indicizzano inizio e fine invece della pagina intera. 0 = spento. */
+  const tettoCaratteri = Number(arg("--max-chars") ?? "0")
 
   async function lavora(pageId: string, abs: string): Promise<void> {
     if (fermato || Date.now() > deadline) return
@@ -290,6 +292,33 @@ async function main() {
     const kb = content.length / 1024
     if (kb > grandeKb) {
       console.error(`[backfill] pagina grande: ${pageId} — ${kb.toFixed(0)} KB, ci vorrà`)
+    }
+
+    // Una pagina fuori scala non è lenta: è impossibile. `embedPage` prepara
+    // TUTTE le righe in memoria e poi le scrive in un colpo solo, quindi una
+    // pagina da 45 MB diventa decine di migliaia di vettori da 1536 numeri
+    // tenuti insieme. Misurato su questo vault: il processo veniva ucciso a 6 GB,
+    // ripartiva sulla STESSA pagina — che è la prima della lista — e moriva di
+    // nuovo. Trenta minuti, due morti, zero pagine: un anello chiuso.
+    //
+    // Si indicizzano l'INIZIO e la FINE. Sono perizie ed estratti conto usciti
+    // dall'OCR: l'inizio porta le parti, i numeri di conto e la premessa, la
+    // fine porta le conclusioni, e in mezzo ci sono righe di movimenti su cui
+    // la ricerca per significato non aggiunge nulla — quelle restano comunque
+    // raggiungibili per parola esatta, perché il markdown sul disco è intero.
+    if (tettoCaratteri > 0 && content.length > tettoCaratteri) {
+      const testa = Math.floor(tettoCaratteri * 0.75)
+      const coda = tettoCaratteri - testa
+      const originale = content.length
+      content =
+        content.slice(0, testa) +
+        `\n\n---\n*[${((originale - tettoCaratteri) / 1024).toFixed(0)} KB centrali non indicizzati — ` +
+        `il documento completo resta cercabile per parola esatta]*\n\n---\n\n` +
+        content.slice(-coda)
+      console.error(
+        `[backfill] ${pageId}: ${(originale / 1048576).toFixed(1)} MB → indicizzo inizio e fine ` +
+        `(${(tettoCaratteri / 1024).toFixed(0)} KB)`,
+      )
     }
 
     try {
@@ -332,11 +361,26 @@ async function main() {
   await Promise.all(todo.map(({ pageId, abs }) => limita(() => lavora(pageId, abs))))
 
   await writeState(vault, { ...state, done: [...done] })
-  try {
-    const r = await vectorCompact(vault)
-    console.error(`[backfill] compattazione finale${r ? ` · ${r.fileRimossi} file rimossi` : ""}`)
-  } catch (err) {
-    console.error(`[backfill] compattazione finale fallita: ${err instanceof Error ? err.message : err}`)
+
+  // Solo se si e' scritto qualcosa. Compattare senza aver indicizzato niente
+  // non e' inutile: e' dannoso. `vectorCompact` rifonde i frammenti e controlla
+  // l'indice ANN, e su questa tabella — 2,6 milioni di righe, 18 GB — costa
+  // cinque core e oltre dieci giga di memoria.
+  //
+  // Misurato sul vault della cliente: la passata delle pagine normali non aveva
+  // piu' niente da fare ("0 da fare"), usciva subito e si metteva a compattare
+  // comunque; veniva uccisa per memoria, systemd la rilanciava, e ricompattava.
+  // Sette minuti a giro, zero pagine di avanzamento, in anello. La compattazione
+  // va fatta quando c'e' qualcosa da compattare.
+  if (fatte > 0) {
+    try {
+      const r = await vectorCompact(vault)
+      console.error(`[backfill] compattazione finale${r ? ` · ${r.fileRimossi} file rimossi` : ""}`)
+    } catch (err) {
+      console.error(`[backfill] compattazione finale fallita: ${err instanceof Error ? err.message : err}`)
+    }
+  } else {
+    console.error("[backfill] niente indicizzato: salto la compattazione")
   }
   const rimasti = pages.length - done.size
   console.error(
