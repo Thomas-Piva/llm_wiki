@@ -43,6 +43,7 @@ import {
   type SavedImage,
 } from "@/lib/extract-source-images"
 import { captionMarkdownImages, loadCaptionCache } from "@/lib/image-caption-pipeline"
+import { expandZipSource, isZipSource } from "@/lib/zip-source"
 import type { MultimodalConfig } from "@/stores/wiki-store"
 import { GENERATION_WIKI_TYPES } from "@/lib/wiki-page-types"
 import { computeContextBudget } from "@/lib/context-budget"
@@ -607,6 +608,14 @@ export async function autoIngest(
 ): Promise<string[]> {
   const pp = normalizePath(projectPath)
   const sp = normalizePath(sourcePath)
+
+  // Un archivio non è un documento. Va aperto PRIMA del lucchetto: qui dentro
+  // si richiama `autoIngest` su ogni file estratto, e farlo tenendo già un
+  // lucchetto del progetto sarebbe il modo più elegante di bloccarsi da soli.
+  if (isZipSource(sp)) {
+    return ingestZipArchive(pp, sp, llmConfig, signal, folderContext, onFileWritten, options)
+  }
+
   return withProjectLock(
     `ingest-source\0${pp}\0${sp}`,
     () => autoIngestImpl(
@@ -619,6 +628,58 @@ export async function autoIngest(
       options,
     ),
   )
+}
+
+/**
+ * Apre l'archivio e ingerisce ciò che contiene, una sorgente per file.
+ *
+ * Un file dentro l'archivio che fallisce non affonda gli altri: si registra e
+ * si prosegue. Se però non ne riesce **nemmeno uno**, l'archivio è un
+ * fallimento vero e deve dirlo — tornare "fatto" con zero pagine scritte è
+ * esattamente il guasto invisibile che un documento vuoto in una coda produce.
+ */
+async function ingestZipArchive(
+  pp: string,
+  sp: string,
+  llmConfig: LlmConfig,
+  signal: AbortSignal | undefined,
+  folderContext: string | undefined,
+  onFileWritten: ((relativePath: string) => void) | undefined,
+  options: AutoIngestOptions | undefined,
+): Promise<string[]> {
+  const nome = getFileName(sp)
+  const { files, skipped } = await expandZipSource(sp)
+  console.log(`[ingest:zip] "${nome}": ${files.length} file estratti` +
+    (skipped.length ? `, ${skipped.length} saltati` : ""))
+  for (const s of skipped) console.warn(`[ingest:zip] ${nome}: ${s}`)
+
+  if (files.length === 0) {
+    throw new Error(
+      `L'archivio "${nome}" non contiene file ingeribili` +
+      (skipped.length ? ` (${skipped.slice(0, 3).join("; ")})` : ""),
+    )
+  }
+
+  const scritte: string[] = []
+  const falliti: string[] = []
+  for (const f of files) {
+    throwIfIngestAborted(signal)
+    try {
+      scritte.push(...await autoIngest(pp, f, llmConfig, signal, folderContext, onFileWritten, options))
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      falliti.push(`${getFileName(f)}: ${msg}`)
+      console.warn(`[ingest:zip] ${nome} → ${getFileName(f)} fallito: ${msg.slice(0, 160)}`)
+    }
+  }
+
+  if (scritte.length === 0) {
+    throw new Error(
+      `L'archivio "${nome}": nessuno dei ${files.length} file è stato ingerito` +
+      (falliti.length ? ` — ${falliti.slice(0, 3).join("; ")}` : ""),
+    )
+  }
+  return scritte
 }
 
 function throwIfIngestAborted(signal: AbortSignal | undefined, activityId?: string): void {
@@ -1055,8 +1116,15 @@ async function autoIngestImpl(
   // and returns [] on any error.
   activity.updateItem(activityId, { detail: "Extracting embedded images..." })
   console.log(`[ingest:diag] full-pipeline branch: starting image extraction for ${sp}`)
+  // Con le didascalie spente le immagini estratte non finiscono comunque nella
+  // pagina — vengono tolte dal contenuto poco piu' sotto (`stripped image refs`).
+  // Estrarle e' quindi lavoro che nessuno usa, e su questo archivio non e'
+  // lavoro poco: `pdfimages` va in timeout a **120 secondi** sugli estratti
+  // conto da decine di MB, dodici lavoratori alla volta. E' la ragione per cui
+  // la coda stava a un documento al minuto con la macchina al 35 di carico.
+  const didascalieSpente = !useWikiStore.getState().multimodalConfig.enabled
   const skipNativePdfImageExtraction = isPdf && (
-    hasMineruImageRefs(sourceContent, sourceSummarySlug)
+    didascalieSpente || hasMineruImageRefs(sourceContent, sourceSummarySlug)
   )
   let savedImages = skipNativePdfImageExtraction
     ? mineruSavedImages
