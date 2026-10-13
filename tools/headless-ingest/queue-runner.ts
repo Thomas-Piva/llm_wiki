@@ -117,11 +117,11 @@ async function processTask(
 }
 
 /**
- * Tre tentativi. Un troncamento va e viene con la lunghezza della risposta, e
- * tre giri bastano a coprire quella variabilità; oltre, il documento ha un
+ * Cinque tentativi. Un troncamento va e viene con la lunghezza della risposta, e
+ * cinque giri coprono quella variabilità meglio di tre; oltre, il documento ha un
  * problema suo e continuare costa senza servire.
  */
-const MAX_TRUNCATION_RETRIES = 3
+const MAX_TRUNCATION_RETRIES = 5
 
 /** La generazione si è fermata a metà di un blocco, non ha prodotto spazzatura. */
 export function isTruncationFailure(message: string): boolean {
