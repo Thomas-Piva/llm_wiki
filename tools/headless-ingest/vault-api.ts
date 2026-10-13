@@ -11,7 +11,7 @@
  *   chat    → retrieve-only (the MCP client synthesizes; no server-side LLM)
  *   reviews → .llm-wiki/review.json if present, else empty
  */
-import { execFile } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
 import { readFile, writeFile, readdir, stat } from "node:fs/promises"
 import { resolve, join, relative, sep, basename } from "node:path"
@@ -99,22 +99,79 @@ async function cachedFileList(vault: string, root: string, recursive: boolean, c
   return data
 }
 
+/**
+ * Quanto si concede alla corsia testuale prima di rispondere con quello che c'è.
+ *
+ * Misurato sul vault della cliente dopo la consegna — 51.922 pagine, 2,8 GB di
+ * markdown, box a 2 core: `rg` su tutto ci mette **oltre 90 secondi**, e non
+ * per le immagini (limitarlo ai soli `.md` non cambia niente): è il volume. Due
+ * dei 2,8 GB stanno in 493 perizie uscite dall'OCR.
+ *
+ * Una ricerca da novanta secondi, per chi la usa, è rotta. E la corsia lenta
+ * non deve trascinarsi dietro quella veloce: la semantica risponde in
+ * millisecondi. Quindi il testuale ha un tetto di tempo e uno di dimensione, e
+ * quando sfora si risponde con quello che ha trovato invece di far aspettare.
+ */
+const RG_TETTO_MS = 5_000
+/** Le pagine mostruose sono tabelle di movimenti: la ricerca per parola le
+ *  trova comunque dal loro titolo e dalle sorelle, e scandagliarle costa il 70%
+ *  del tempo per il 3% delle pagine. */
+const RG_TETTO_FILE = "2M"
+
+/**
+ * Quante pagine bastano alla corsia testuale prima di fermare la scansione.
+ *
+ * ⛔ Il tetto giusto è sui RISULTATI, non sul tempo. La prima versione uccideva
+ * `rg` dopo N millisecondi con `execFile`, e li' c'e' la trappola: quando il
+ * processo viene terminato a forza, `execFile` **butta via anche l'uscita che
+ * aveva gia' raccolto**. Misurato sul box della cliente: la scansione completa
+ * di "diritto bancario" dura 48,7 s e trova 107 pagine; col tetto a 8 s
+ * l'API restituiva **zero**. Un tetto che scarta il lavoro fatto e' peggio di
+ * nessun tetto.
+ *
+ * Con `spawn` l'uscita arriva a pezzi mentre esce, quindi si conta e si chiude
+ * quando basta: chi cerca non guarda mai la duecentesima pagina, e su una
+ * domanda frequente la risposta arriva in un attimo. Su una rara si scandaglia
+ * tutto, che e' inevitabile — e allora conta il tetto di tempo, ma stavolta
+ * quello che si e' letto si tiene.
+ */
+const RG_MAX_PAGINE = 200
+
 /** ripgrep, literal + case-insensitive; rank files by match count. */
 export async function rgSearch(vault: string, query: string, topK: number) {
   const wiki = join(vault, "wiki")
   if (!query.trim()) return []
-  let countsOut = ""
-  try {
-    const { stdout } = await execFileAsync(
-      "rg",
-      ["-F", "-i", "-c", "--color", "never", query, wiki],
-      { maxBuffer: 16 * 1024 * 1024 },
-    )
-    countsOut = stdout
-  } catch (err: any) {
-    if (err?.code === 1) return [] // no matches
-    throw err
-  }
+
+  const countsOut = await new Promise<string>((resolve) => {
+    const p = spawn("rg", [
+      "-F", "-i", "-c", "--color", "never",
+      "--glob", "*.md",                 // il contenuto è markdown: i binari non si leggono
+      "--max-filesize", RG_TETTO_FILE,  // salta le perizie-tabella
+      query, wiki,
+    ])
+    let acc = ""
+    let righe = 0
+    let chiuso = false
+    const chiudi = (motivo?: string) => {
+      if (chiuso) return
+      chiuso = true
+      clearTimeout(orologio)
+      if (motivo) console.warn(`[search] corsia testuale: ${motivo} — rispondo con quello che ho (${righe} pagine)`)
+      p.kill("SIGKILL")
+      resolve(acc)
+    }
+    // Rete di sicurezza per la domanda rara che non trova niente: si smette di
+    // aspettare, ma quello che e' stato letto NON si butta.
+    const orologio = setTimeout(() => chiudi(`oltre ${RG_TETTO_MS} ms`), RG_TETTO_MS)
+
+    p.stdout.on("data", (d: Buffer) => {
+      acc += d.toString()
+      righe = acc.split("\n").length - 1
+      if (righe >= RG_MAX_PAGINE) chiudi()
+    })
+    p.on("error", () => chiudi("ripgrep non disponibile"))
+    p.on("close", () => { clearTimeout(orologio); if (!chiuso) { chiuso = true; resolve(acc) } })
+  })
   const ranked = countsOut
     .split("\n")
     .filter(Boolean)
@@ -264,12 +321,52 @@ async function embeddingConfigFor(vault: string): Promise<Record<string, any> | 
  * a ogni domanda — un indice da 7 ms lì accanto, e nessuno che lo interrogasse.
  * Una sola implementazione, due chiamanti.
  */
+/**
+ * Quanto si concede alla corsia semantica prima di rispondere senza di lei.
+ *
+ * ⛔ Nessuna corsia deve poter bloccare la risposta. Misurato sul box della
+ * cliente: una ricerca restava appesa **oltre 60 secondi** e il chiamante non
+ * riceveva niente. La corsia testuale aveva già il suo tetto e rispondeva
+ * parziale; era la semantica a non tornare, perché il suo indice ha **3.607
+ * frammenti** mai rifusi (LanceDB 0.37 non li compatta con `optimize()`) e ogni
+ * ricerca deve aprirli tutti su due core.
+ *
+ * Con un tetto, la stessa domanda torna in dieci secondi con i risultati
+ * testuali invece di non tornare affatto. Quando l'indice e' sano la semantica
+ * risponde in millisecondi e questo tetto non si vede nemmeno.
+ */
+const SEMANTICA_TETTO_MS = 30_000
+
+/** Corre la promessa, e se sfora il tempo restituisce il ripiego invece di aspettare. */
+async function conTetto<T>(p: Promise<T>, ms: number, ripiego: T, etichetta: string): Promise<T> {
+  let t: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      p,
+      new Promise<T>((res) => {
+        t = setTimeout(() => {
+          console.warn(`[search] ${etichetta} oltre ${ms} ms: rispondo senza`)
+          res(ripiego)
+        }, ms)
+      }),
+    ])
+  } finally {
+    if (t) clearTimeout(t)
+  }
+}
+
 export async function ricercaIbrida(vault: string, query: string, topKRaw: number) {
   const topK = Math.min(50, Number(topKRaw) || 20)
-  const [keyword, semantic] = await Promise.all([
-    rgSearch(vault, query, topK),
-    semanticSearch(vault, query, topK),
-  ])
+  // ⛔ IN FILA, NON INSIEME. Misurato sul box della cliente (2 core): la corsia
+  // testuale scandaglia 2,8 GB a pieno carico per decine di secondi e AFFAMA il
+  // caricamento dell'indice vettoriale, che costa 6,8 s a freddo e 295-396 ms a
+  // caldo. In `Promise.all` la semantica non arrivava mai e tornava sempre
+  // vuota: `mode: keyword`, `vectorHits: 0`, a ogni domanda, con un indice
+  // sano a fianco. In fila — semantica per prima, che e' quella che trova la
+  // cosa giusta — le stesse domande tornano `hybrid` in 7,5-8,2 s.
+  const semantic = await conTetto(
+    semanticSearch(vault, query, topK), SEMANTICA_TETTO_MS, [] as any[], "corsia semantica")
+  const keyword = await rgSearch(vault, query, topK)
   const merged = new Map<string, any>()
   for (const r of keyword) merged.set(r.path, r)
   for (const r of semantic) {
