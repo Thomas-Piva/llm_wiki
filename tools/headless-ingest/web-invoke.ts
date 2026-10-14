@@ -20,6 +20,7 @@ import { promises as fs } from "node:fs"
 import { createHash } from "node:crypto"
 import { resolve, dirname, extname, join, relative, sep, basename } from "node:path"
 import { isStructuredText, structuredToText } from "@/lib/structured-text"
+import { extractionCachePath } from "@/lib/extraction-cache"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { ricercaIbrida, rgSearch, titleFrom } from "./vault-api"
@@ -262,7 +263,7 @@ export async function dispatchInvoke(cmd: string, args: any, vault: string): Pro
       // Mirror the desktop: prefer a fresh `.cache/<name>.txt` (MinerU/media
       // extracted text) so opening a parsed PDF shows its markdown, not bytes.
       const p = guard(vault, A.path)
-      const cache = join(dirname(p), ".cache", `${basename(p)}.txt`)
+      const cache = extractionCachePath(vault, p)
       try {
         const [cs, os] = await Promise.all([fs.stat(cache), fs.stat(p)])
         if (cs.mtimeMs >= os.mtimeMs) return fs.readFile(cache, "utf8")

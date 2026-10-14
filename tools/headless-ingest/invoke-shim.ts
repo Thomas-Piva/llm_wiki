@@ -16,6 +16,7 @@ import { dirname, join, basename, extname } from "node:path"
 import { tmpdir } from "node:os"
 import { emitEvent } from "./tauri-event-bus"
 import { isStructuredText, structuredToText } from "@/lib/structured-text"
+import { extractionCachePath } from "@/lib/extraction-cache"
 import { appendOnlyEnabled, ensureIdentity, isWikiPage, nuovoIdPagina } from "./note-policy"
 import {
   embedTexts,
@@ -26,6 +27,38 @@ import {
   vectorClearChunks,
 } from "./vector-store"
 import { toMarkdown } from "@firecrawl/anydoc"
+
+/**
+ * Il progetto a cui appartiene un file, risalendo fino alla cartella che
+ * contiene `.llm-wiki`.
+ *
+ * Serve perche' `read_file` riceve solo un percorso: la radice non e' tra gli
+ * argomenti, e senza radice non si sa dove sta lo specchio della cache. Il
+ * risultato e' memorizzato per cartella — l'ingest legge migliaia di file nella
+ * stessa, e sarebbero migliaia di `statSync` identiche.
+ */
+const radiciNote = new Map<string, string>()
+function radiceProgetto(file: string): string {
+  let dir = dirname(file)
+  const partenza = dir
+  const giaVista = radiciNote.get(dir)
+  if (giaVista !== undefined) return giaVista
+  for (let salite = 0; salite < 40; salite++) {
+    try {
+      if (statSync(join(dir, ".llm-wiki")).isDirectory()) {
+        radiciNote.set(partenza, dir)
+        return dir
+      }
+    } catch { /* non qui: si sale */ }
+    const sopra = dirname(dir)
+    if (sopra === dir) break
+    dir = sopra
+  }
+  // Nessuna radice: l'aiutante della cache torna da solo alla disposizione
+  // storica, accanto al file.
+  radiciNote.set(partenza, "")
+  return ""
+}
 
 const CLAUDE_BIN = process.env.AGENT_CLAUDE_BIN ?? "/home/claude/.local/bin/claude"
 const CODEX_BIN = process.env.AGENT_CODEX_BIN ?? "/opt/node25/bin/codex"
@@ -270,7 +303,7 @@ export async function invoke<T = unknown>(cmd: string, args: any = {}): Promise<
       // PDF path transparently returns the parsed markdown. Falls back to
       // reading the file directly. `extractImages` is ignored (text-first).
       const src = String(args.path)
-      const cache = join(dirname(src), ".cache", `${basename(src)}.txt`)
+      const cache = extractionCachePath(radiceProgetto(src), src)
       try {
         const [cs, os] = await Promise.all([fs.stat(cache), fs.stat(src)])
         if (cs.mtimeMs >= os.mtimeMs) return (await fs.readFile(cache, "utf8")) as T
@@ -281,6 +314,10 @@ export async function invoke<T = unknown>(cmd: string, args: any = {}): Promise<
       if (OFFICE_EXTS.has(ext)) {
         try {
           const md = await toMarkdown(src)
+          // ⚠️ Questo `mkdir` e' il punto in cui un montaggio in sola lettura
+          // faceva deragliare tutto: EROFS qui finisce nel `catch` qui sotto,
+          // che **legge il .docx grezzo** e manda byte al modello. Con
+          // `LLMWIKI_CACHE_IN_PROJECT=1` la cache non e' piu' accanto al file.
           await fs.mkdir(dirname(cache), { recursive: true })
           await fs.writeFile(cache, md, "utf8")
           return md as T

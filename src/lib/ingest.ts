@@ -49,6 +49,7 @@ import { GENERATION_WIKI_TYPES } from "@/lib/wiki-page-types"
 import { computeContextBudget } from "@/lib/context-budget"
 import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
 import { persistParsedMarkdown } from "@/lib/parsed-source-output"
+import { extractionCacheDir, extractionCachePath } from "@/lib/extraction-cache"
 
 const LONG_SOURCE_MIN_BUDGET = 8_000
 const LONG_SOURCE_MAX_SINGLE_PASS_BUDGET = 300_000
@@ -798,9 +799,9 @@ async function autoIngestImpl(
         // branch had never existed.
         console.log(`[ingest:pdftotext] "${fileName}": ${raw.length} caratteri in locale, MinerU non richiesto`)
         localPdfText = raw
-        const cacheDir = sp.substring(0, sp.lastIndexOf("/"))
-        await createDirectory(`${cacheDir}/.cache`)
-        await writeFile(`${cacheDir}/.cache/${fileName}.txt`, raw)
+        const cacheDir = extractionCacheDir(pp, sp)
+        await createDirectory(cacheDir)
+        await writeFile(extractionCachePath(pp, sp), raw)
       } else {
         // Dire *quanto* è stato estratto e su quante pagine: "nessun testo" su
         // un file da cui ne erano usciti 802 caratteri ha mandato la diagnosi
@@ -823,8 +824,8 @@ async function autoIngestImpl(
 
   if (isPdf && !localPdfText && mineruCfg.enabled && mineruConfigured) {
     try {
-      const cacheDir = sp.substring(0, sp.lastIndexOf("/"))
-      const cachePath = `${cacheDir}/.cache/${fileName}.txt`
+      const cacheDir = extractionCacheDir(pp, sp)
+      const cachePath = extractionCachePath(pp, sp)
       activity.updateItem(activityId, { detail: "MinerU: parsing PDF..." })
       console.log(`[ingest:mineru] submitting "${fileName}" to MinerU API`)
       const mineruResult = await parseWithMineruResult(mineruCfg, sp, undefined, (msg) => {
@@ -833,7 +834,7 @@ async function autoIngestImpl(
         projectPath: pp,
         sourceSummarySlug,
       })
-      await createDirectory(`${cacheDir}/.cache`)
+      await createDirectory(cacheDir)
       await writeFile(cachePath, mineruResult.markdown)
       mineruSavedImages = mineruResult.savedImages
       if (mineruSavedImages.length > 0) {
@@ -858,9 +859,9 @@ async function autoIngestImpl(
       const utiliParziali = pdfTextParziale.replace(/\s/g, "").length
       if (utiliParziali >= 20) {
         try {
-          const cacheDir = sp.substring(0, sp.lastIndexOf("/"))
-          await createDirectory(`${cacheDir}/.cache`)
-          await writeFile(`${cacheDir}/.cache/${fileName}.txt`, pdfTextParziale)
+          const cacheDir = extractionCacheDir(pp, sp)
+          await createDirectory(cacheDir)
+          await writeFile(extractionCachePath(pp, sp), pdfTextParziale)
           localPdfText = pdfTextParziale
           console.warn(
             `[ingest:mineru] "${fileName}" rifiutato da MinerU (${msg}) — ripiego sui ` +
@@ -891,13 +892,13 @@ async function autoIngestImpl(
       // never auto-cleared, so delete it in `finally` — success or failure.
       let audioPath: string | undefined
       try {
-        const cacheDir = sp.substring(0, sp.lastIndexOf("/"))
-        const cachePath = `${cacheDir}/.cache/${fileName}.txt`
+        const cacheDir = extractionCacheDir(pp, sp)
+        const cachePath = extractionCachePath(pp, sp)
         activity.updateItem(activityId, { detail: "Extracting audio..." })
         audioPath = await extractAudioTrack(sp)
         activity.updateItem(activityId, { detail: "Transcribing audio..." })
         const transcript = await transcribeAudio(audioPath, mediaCfg, signal)
-        await createDirectory(`${cacheDir}/.cache`)
+        await createDirectory(cacheDir)
         await writeFile(cachePath, transcript)
         console.log(`[ingest:media] cached transcript for "${fileName}" (${transcript.length} chars)`)
       } catch (err) {
@@ -938,12 +939,12 @@ async function autoIngestImpl(
       const captionLlm = resolveCaptionConfig(mmCfg, llmConfig)
       if (captionLlm) {
         try {
-          const cacheDir = sp.substring(0, sp.lastIndexOf("/"))
-          const cachePath = `${cacheDir}/.cache/${fileName}.txt`
+          const cacheDir = extractionCacheDir(pp, sp)
+          const cachePath = extractionCachePath(pp, sp)
           activity.updateItem(activityId, { detail: "Captioning image..." })
           const { base64, mimeType } = await readFileAsBase64(sp)
           const caption = await captionImage(base64, mimeType, captionLlm, signal)
-          await createDirectory(`${cacheDir}/.cache`)
+          await createDirectory(cacheDir)
           await writeFile(cachePath, caption)
           console.log(`[ingest:media] cached caption for "${fileName}"`)
         } catch (err) {
