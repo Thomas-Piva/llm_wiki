@@ -13,7 +13,7 @@
  * Optional bearer auth: set LIGHT_BACKEND_TOKEN (or LLM_WIKI_API_TOKEN) and
  * send `Authorization: Bearer <token>`. LIGHT_BACKEND_TOKEN takes precedence.
  */
-import { execFile } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises"
 import { readFileSync } from "node:fs"
@@ -166,36 +166,80 @@ function loginPage(err = false): Response {
   return new Response(html, { status: err ? 401 : 200, headers: { "content-type": "text/html; charset=utf-8" } })
 }
 
-/** Keyword search via ripgrep. Query is passed as a FIXED string (-F), never
- *  as shell or regex, so it is injection-safe. */
+/** Hard ceiling on a keyword search. Past this, partial results beat no answer. */
+const RICERCA_TETTO_MS = 5_000
+/** Only markdown, and not the monsters: the biggest OCR pages reach 45 MB. */
+const RICERCA_MAX_FILE = "2M"
+
+/**
+ * Keyword search via ripgrep. The query is passed as a FIXED string (`-F`),
+ * never as shell or regex, so it is injection-safe.
+ *
+ * Streamed and stopped early, which the first version was not. It ran
+ * `execFile` to completion, buffered the whole output, and only then cut the
+ * list down to `limit` — so asking for three results scanned all 2,9 GB of the
+ * vault. Measured on the client's box: **38-42 seconds** per search, and before
+ * `wiki/media` grew a `.ignore` it was worse than that, because the media
+ * folder is an rclone mount and ripgrep was pulling 4,7 GB **down from Google
+ * Drive** to look for a word. One such `rg` was found still running after nine
+ * minutes.
+ *
+ * Three guards, the same ones the hybrid search already had on the other path
+ * — this function is a second, separate road to ripgrep, and it had none of
+ * them:
+ *  · `--glob '*.md'` and `--max-filesize`: a search looks in pages, not in
+ *    whatever else happens to sit under `wiki/`;
+ *  · kill the child as soon as `limit` lines are in hand;
+ *  · a deadline, after which we answer with what we have.
+ */
 async function search(q: string, limit: number) {
   if (!q.trim()) return []
-  try {
-    // -F literal, -i case-insensitive, -n line numbers, -m cap per file.
-    const { stdout } = await execFileAsync(
-      "rg",
-      ["-F", "-i", "-n", "-m", "2", "--no-heading", "--color", "never", q, WIKI],
-      { maxBuffer: 8 * 1024 * 1024 },
-    )
-    const results = []
-    for (const line of stdout.split("\n")) {
-      if (!line) continue
-      // "<abs path>:<lineno>:<text>"
-      const m = /^(.*?):(\d+):(.*)$/.exec(line)
-      if (!m) continue
-      results.push({
-        path: m[1].startsWith(WIKI + sep) ? m[1].slice(VAULT.length + 1) : m[1],
-        line: Number(m[2]),
-        snippet: m[3].slice(0, 300),
-      })
-      if (results.length >= limit) break
+  const risultati: Array<{ path: string; line: number; snippet: string }> = []
+
+  return await new Promise<typeof risultati>((resolve) => {
+    const figlio = spawn("rg", [
+      "-F", "-i", "-n", "-m", "2",
+      "--no-heading", "--color", "never",
+      "--glob", "*.md",
+      "--max-filesize", RICERCA_MAX_FILE,
+      q, WIKI,
+    ], { stdio: ["ignore", "pipe", "ignore"] })
+
+    let finito = false
+    const chiudi = (motivo: string) => {
+      if (finito) return
+      finito = true
+      clearTimeout(scadenza)
+      figlio.kill("SIGKILL")
+      if (motivo === "scadenza") {
+        console.warn(`[search] oltre ${RICERCA_TETTO_MS} ms: rispondo con ${risultati.length} risultati parziali`)
+      }
+      resolve(risultati)
     }
-    return results
-  } catch (err: any) {
-    // rg exits 1 when there are no matches — that's an empty result, not an error.
-    if (err?.code === 1) return []
-    throw err
-  }
+    const scadenza = setTimeout(() => chiudi("scadenza"), RICERCA_TETTO_MS)
+
+    let resto = ""
+    figlio.stdout.on("data", (pezzo: Buffer) => {
+      resto += pezzo.toString("utf8")
+      const righe = resto.split("\n")
+      resto = righe.pop() ?? ""
+      for (const riga of righe) {
+        if (!riga) continue
+        // "<percorso assoluto>:<riga>:<testo>"
+        const m = /^(.*?):(\d+):(.*)$/.exec(riga)
+        if (!m) continue
+        risultati.push({
+          path: m[1].startsWith(WIKI + sep) ? m[1].slice(VAULT.length + 1) : m[1],
+          line: Number(m[2]),
+          snippet: m[3].slice(0, 300),
+        })
+        if (risultati.length >= limit) return chiudi("abbastanza")
+      }
+    })
+    // `rg` esce 1 quando non trova niente: non e' un errore, e' zero risultati.
+    figlio.on("close", () => chiudi("fine"))
+    figlio.on("error", () => chiudi("fine"))
+  })
 }
 
 /** Read a page. Path must resolve INSIDE the vault (no traversal). */
