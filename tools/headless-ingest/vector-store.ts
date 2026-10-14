@@ -349,6 +349,14 @@ export function vectorClearChunks(vault: string): Promise<void> {
 }
 
 /**
+ * Quanto si aspetta una risposta dall'endpoint di embedding prima di
+ * considerarla persa. Generoso di proposito: un lotto di pezzi lunghi costa
+ * dieci-quindici secondi veri, e un tetto stretto trasformerebbe la lentezza
+ * in errori. Novanta secondi distinguono «lento» da «non torna piu'».
+ */
+const EMBED_TIMEOUT_MS = 90_000
+
+/**
  * Embed texts through an OpenAI-compatible `/v1/embeddings` endpoint (OpenAI,
  * Gemini openai-compat, Voyage, Jina, local servers…). `cfg` is the app's
  * EmbeddingConfig (endpoint, model, apiKey, outputDimensionality, extraHeaders).
@@ -363,7 +371,41 @@ export async function embedTexts(texts: string[], cfg: Record<string, any>): Pro
     ...(cfg.extraHeaders ?? {}),
   }
   if (cfg.apiKey) headers.authorization = `Bearer ${cfg.apiKey}`
-  const res = await fetch(cfg.endpoint, { method: "POST", headers, body: JSON.stringify(body) })
+
+  // ⚠️ Questa `fetch` non aveva ne' signal ne' timeout, e una richiesta appesa
+  // non torna da sola. Misurato sulla VPS della cliente il 14/10: il drenaggio
+  // fermo **undici minuti** su un solo PDF, processo in `ep_poll` con due
+  // connessioni aperte verso l'endpoint e zero righe di log. Non era lento,
+  // era bloccato — e senza un tetto lo sarebbe rimasto per sempre, con 1.900
+  // documenti in coda dietro.
+  //
+  // Un tentativo in piu' sul timeout perche' una connessione che muore e'
+  // tipicamente un fatto di rete, non del contenuto: lo stesso lotto al
+  // secondo colpo passa. Gli errori HTTP veri (402, 429, 400) NON si ritentano
+  // qui: hanno gia' la loro gestione piu' in alto, e ripeterli brucia quota.
+  let res: Response
+  let tentativo = 0
+  for (;;) {
+    try {
+      res = await fetch(cfg.endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
+      })
+      break
+    } catch (err) {
+      const scaduto = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")
+      if (!scaduto || tentativo >= 1) {
+        throw new Error(
+          `embedding: richiesta non riuscita dopo ${tentativo + 1} tentativi ` +
+          `(tetto ${EMBED_TIMEOUT_MS} ms): ${err instanceof Error ? err.message : String(err)}`,
+        )
+      }
+      tentativo++
+      console.warn(`[embedding] nessuna risposta entro ${EMBED_TIMEOUT_MS} ms, riprovo una volta`)
+    }
+  }
   if (!res.ok) {
     throw new Error(`embedding HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)
   }
