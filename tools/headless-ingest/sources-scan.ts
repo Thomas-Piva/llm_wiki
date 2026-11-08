@@ -34,12 +34,38 @@ function folderContextFor(relFromSources: string): string {
  * repo — se lo e' ripreso pari pari, 225 doppioni.
  */
 async function ingestedPaths(project: string): Promise<Set<string>> {
+  const out = new Set<string>()
   try {
     const raw = await fs.readFile(join(project, ".llm-wiki", "file-snapshot.json"), "utf8")
-    return new Set(Object.keys(JSON.parse(raw)?.files ?? {}))
-  } catch {
-    return new Set()
+    for (const k of Object.keys(JSON.parse(raw)?.files ?? {})) out.add(k)
+  } catch { /* nessuno snapshot: non e' un errore */ }
+
+  // ⚠️ `file-snapshot.json` da solo NON basta, e la prova costa cara. Sul vault
+  // della cliente era fermo ad agosto con 11.004 voci mentre le fonti ingerite
+  // erano 43.087. Il 17/10/2026 un clic su «Refresh» nel pannello File Sync
+  // (`rescan_project_files`) ha rimesso in coda **40.456 documenti**: il 93%
+  // aveva gia' una pagina. A cascata: un PDF che uccideva il processo per OOM e
+  // veniva ritentato all'infinito, e una settimana senza scrivere una pagina.
+  //
+  // Due elenchi in piu', entrambi in `.llm-wiki/` e tenuti aggiornati dal giro
+  // notturno, entrambi relativi a `raw/sources/`:
+  //  · `sorgenti-ingerite.txt` — le fonti citate dal campo `sources:` delle
+  //    pagine, cioe' il registro vero di cio' che e' stato ingerito;
+  //  · `dropbox-ignorati.txt` — cio' che e' stato messo da parte DI PROPOSITO
+  //    (scansioni, immagini, audio, formati Apple, archivi): una decisione, non
+  //    una dimenticanza, e una riscansione non deve annullarla.
+  // Se mancano, si ricade sul comportamento di prima: un vault senza questi
+  // file non ha il problema per cui esistono.
+  for (const nome of ["sorgenti-ingerite.txt", "dropbox-ignorati.txt"]) {
+    try {
+      const testo = await fs.readFile(join(project, ".llm-wiki", nome), "utf8")
+      for (const riga of testo.split("\n")) {
+        const r = riga.trim()
+        if (r) out.add(r.startsWith(`${SOURCES_REL}/`) ? r : join(SOURCES_REL, r))
+      }
+    } catch { /* elenco assente */ }
   }
+  return out
 }
 
 async function walkFiles(dir: string, acc: string[]): Promise<void> {
