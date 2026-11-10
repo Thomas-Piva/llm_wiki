@@ -414,7 +414,11 @@ async function main() {
   }
 }
 
-if (process.argv.some((a) => a.includes("embed-backfill"))) {
+// Si parte solo se il file LANCIATO e' questo. La guardia era
+// `a.includes("embed-backfill")`, che e' vera anche per
+// `embed-backfill.test.ts`: lanciando i test partiva il programma vero, che
+// senza `--project` esce con `process.exit(1)` e si portava via il test.
+if (process.argv.some((a) => /(^|[\\/])embed-backfill\.ts$/.test(a))) {
   main().catch((err) => {
     console.error(`[backfill] ${err instanceof Error ? err.message : err}`)
     process.exit(1)
