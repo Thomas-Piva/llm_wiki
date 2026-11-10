@@ -134,16 +134,46 @@ function guard(vault: string, p: string): string {
 
 interface FileNode { name: string; path: string; is_dir: boolean; children?: FileNode[] }
 
-async function listDir(dir: string, includeHidden: boolean, maxDepth: number | undefined, depth: number): Promise<FileNode[]> {
+/**
+ * Quanti elementi al massimo restituisce UNA chiamata. Rete di sicurezza: il
+ * vault di una cliente ha 51.000 pagine, e l'albero intero ci deve stare.
+ */
+const ELEMENTI_MAX = 80_000
+
+/**
+ * ⚠️ `listDir` non entra nelle cartelle che stanno su un ALTRO filesystem
+ * rispetto alla radice del vault — come `find -xdev`.
+ *
+ * Su un vault reale quelle cartelle sono montaggi di rete: l'archivio Dropbox
+ * della cliente (46.000 file, in sola lettura) e le immagini sul suo Drive
+ * (24.000). La versione senza questa regola li camminava tutti a ogni apertura
+ * dell'interfaccia, costruiva l'elenco in memoria, sforava il tetto di 600 MB
+ * del servizio e veniva uccisa dall'OOM killer: risposta vuota, e
+ * l'interfaccia scriveva «Ancora nessuna pagina wiki» su un vault di 51.000.
+ * Misurato il 10/11/2026: tre aperture, tre uccisioni.
+ *
+ * La cartella del montaggio compare nell'albero; i suoi figli diretti si vedono
+ * se la si apre (chiamata col suo percorso), ma non si scende oltre.
+ */
+export async function listDir(
+  dir: string, includeHidden: boolean, maxDepth: number | undefined, depth: number,
+  devRadice?: number, contatore = { n: 0 },
+): Promise<FileNode[]> {
   let entries: Awaited<ReturnType<typeof fs.readdir>>
   try { entries = await fs.readdir(dir, { withFileTypes: true }) } catch { return [] }
   const out: FileNode[] = []
   for (const e of entries) {
+    if (contatore.n >= ELEMENTI_MAX) break
     if (!includeHidden && e.name.startsWith(".")) continue
     const full = join(dir, e.name)
     const node: FileNode = { name: e.name, path: full, is_dir: e.isDirectory() }
+    contatore.n++
     if (e.isDirectory() && (maxDepth === undefined || depth < maxDepth)) {
-      node.children = await listDir(full, includeHidden, maxDepth, depth + 1)
+      const altroFilesystem = devRadice !== undefined
+        && await fs.stat(full).then((s) => s.dev !== devRadice, () => true)
+      if (!altroFilesystem) {
+        node.children = await listDir(full, includeHidden, maxDepth, depth + 1, devRadice, contatore)
+      }
     }
     out.push(node)
   }
@@ -320,7 +350,12 @@ export async function dispatchInvoke(cmd: string, args: any, vault: string): Pro
       const buf = await fs.readFile(guard(vault, A.path))
       return { base64: buf.toString("base64"), mimeType: MIME[extname(A.path).toLowerCase()] ?? "application/octet-stream" }
     }
-    case "list_directory": return listDir(guard(vault, A.path), !!A.includeHidden, A.maxDepth, 0)
+    case "list_directory": {
+      // Il filesystem della radice del vault: i montaggi sotto di lei ne hanno
+      // un altro, e `listDir` non ci scende (vedi sopra).
+      const devRadice = await fs.stat(vault).then((s) => s.dev, () => undefined)
+      return listDir(guard(vault, A.path), !!A.includeHidden, A.maxDepth, 0, devRadice)
+    }
     case "create_directory": await fs.mkdir(guard(vault, A.path), { recursive: true }); return null
     case "delete_file": {
       const p = guard(vault, A.path)
