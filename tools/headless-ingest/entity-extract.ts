@@ -58,7 +58,7 @@ export interface RigaGrafo {
    * Misurato sullo stesso passaggio, prima e dopo:
    *
    *     solo estrazione            5 archi, 2 sbagliati
-   *       ↳ `Milena Battaglia —causa→ teoria polivagale`  (la citazione dice *insegna*)
+   *       ↳ `Anna Rossi —causa→ teoria polivagale`  (la citazione dice *insegna*)
    *       ↳ `seminario —precede→ Lecco`                   (dice *si è tenuto a*)
    *     + giudizio                 3 archi, 1 discutibile
    *     + tolto il tipo `precede`  2 archi, 0 sbagliati
@@ -197,7 +197,7 @@ type ArcoCandidato = { da: string; a: string; tipo: string; prova: string }
  * Il giudizio, che l'estrazione non può dare.
  *
  * Misurato: il solo controllo «la citazione compare nel testo» lascia passare
- * **2 archi su 5** — `Milena Battaglia —causa→ teoria polivagale` (la citazione
+ * **2 archi su 5** — `Anna Rossi —causa→ teoria polivagale` (la citazione
  * dice *insegna*) e `seminario —precede→ Lecco` (dice *si è tenuto a*). Le
  * citazioni erano vere; era il legame a non esserci.
  *

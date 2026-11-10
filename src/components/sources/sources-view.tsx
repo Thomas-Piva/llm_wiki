@@ -35,7 +35,7 @@ const SOURCE_TREE_LOAD_BATCH = 160
 const IMPORT_SKIP_INITIAL_ROWS = 100
 type SourceIngestStatus = "not-ingested" | "ingested" | IngestTask["status"]
 
-// Web build (no Tauri): the vault can be huge (Milena ~300GB). A full
+// Web build (no Tauri): the vault can be huge (a client vault reached ~300GB). A full
 // recursive walk over HTTP would hang the panel, so on web we load the
 // source tree ONE level at a time and fetch a folder's children only
 // when it's expanded. Desktop keeps the eager recursive load.

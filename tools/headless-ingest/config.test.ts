@@ -13,12 +13,12 @@ import { describe, expect, it } from "vitest"
 
 import { resolveSourceWatchConfig } from "./config"
 
-const PROGETTO = "/opt/llm-wiki/FENICE"
-const ID = "26c6c587-7d6d-4d4a-a10f-8354739e4569"
+const PROGETTO = "/opt/llm-wiki/VAULT"
+const ID = "00000000-0000-4000-8000-000000000001"
 
 /** La forma vera scritta da `saveSourceWatchConfig`: mappa per progetto. */
 const appStateReale = {
-  projectRegistry: { [ID]: { id: ID, path: PROGETTO, name: "FENICE" } },
+  projectRegistry: { [ID]: { id: ID, path: PROGETTO, name: "VAULT" } },
   sourceWatchConfig: {
     [ID]: { enabled: true, maxFileSizeMb: 100 },
     default: { enabled: true, maxFileSizeMb: 40 },
@@ -38,9 +38,9 @@ describe("resolveSourceWatchConfig", () => {
     expect(resolveSourceWatchConfig(appStateReale, `${PROGETTO}/`).maxFileSizeMb).toBe(100)
     const win = {
       ...appStateReale,
-      projectRegistry: { [ID]: { path: "C:\\vault\\FENICE" } },
+      projectRegistry: { [ID]: { path: "C:\\vault\\VAULT" } },
     }
-    expect(resolveSourceWatchConfig(win, "C:/vault/FENICE").maxFileSizeMb).toBe(100)
+    expect(resolveSourceWatchConfig(win, "C:/vault/VAULT").maxFileSizeMb).toBe(100)
   })
 
   it("accetta anche un app-state già piatto", () => {

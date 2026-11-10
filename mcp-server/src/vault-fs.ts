@@ -155,7 +155,7 @@ export async function openSource(
       }
     }
   }
-  // Body references like `dropbox/0_TRIUNE_PROJECT/...` count too
+  // Body references like `dropbox/0_PROGETTO/...` count too
   for (const m of content.matchAll(/(?:^|[\s(])((?:raw\/sources\/)?dropbox\/[^\s)\]]+)/g)) {
     sources.add(m[1]);
   }

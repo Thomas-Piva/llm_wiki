@@ -3,7 +3,7 @@
  * trascrizioni audio, didascalie immagini).
  *
  * Storicamente: `<cartella del file>/.cache/<nome>.txt`, accanto all'originale.
- * Funziona finche' quella cartella e' scrivibile, e sulla VPS di Milena non lo
+ * Funziona finche' quella cartella e' scrivibile, e sulla VPS della cliente non lo
  * e' piu': le quattro cartelle del suo Dropbox sono montate **in sola lettura**
  * — il suo archivio non si tocca — quindi `mkdir .cache` torna EROFS.
  *

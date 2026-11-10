@@ -1,8 +1,8 @@
 import { describe, expect, it, afterEach } from "vitest"
 import { extractionCacheDir, extractionCachePath } from "./extraction-cache"
 
-const PROJ = "/opt/llm-wiki/FENICE"
-const SRC = `${PROJ}/raw/sources/dropbox/1_BANCARIO/estratti/marzo.docx`
+const PROJ = "/opt/llm-wiki/VAULT"
+const SRC = `${PROJ}/raw/sources/dropbox/1_BANCA/estratti/marzo.docx`
 
 function conRedirect<T>(fn: () => T): T {
   process.env.LLMWIKI_CACHE_IN_PROJECT = "1"
@@ -20,14 +20,14 @@ afterEach(() => {
 describe("extraction-cache", () => {
   it("senza la variabile tiene la cache accanto al file, come sempre", () => {
     expect(extractionCachePath(PROJ, SRC)).toBe(
-      `${PROJ}/raw/sources/dropbox/1_BANCARIO/estratti/.cache/marzo.docx.txt`,
+      `${PROJ}/raw/sources/dropbox/1_BANCA/estratti/.cache/marzo.docx.txt`,
     )
   })
 
   it("con la variabile la rispecchia dentro il progetto", () => {
     conRedirect(() => {
       expect(extractionCachePath(PROJ, SRC)).toBe(
-        `${PROJ}/.llm-wiki/cache-estrazione/raw/sources/dropbox/1_BANCARIO/estratti/.cache/marzo.docx.txt`,
+        `${PROJ}/.llm-wiki/cache-estrazione/raw/sources/dropbox/1_BANCA/estratti/.cache/marzo.docx.txt`,
       )
     })
   })
@@ -71,7 +71,7 @@ describe("extraction-cache", () => {
   it("senza percorso del progetto non inventa uno specchio", () => {
     conRedirect(() => {
       expect(extractionCachePath("", SRC)).toBe(
-        `${PROJ}/raw/sources/dropbox/1_BANCARIO/estratti/.cache/marzo.docx.txt`,
+        `${PROJ}/raw/sources/dropbox/1_BANCA/estratti/.cache/marzo.docx.txt`,
       )
     })
   })

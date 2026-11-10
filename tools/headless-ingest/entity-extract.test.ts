@@ -28,7 +28,7 @@ afterEach(async () => {
   await rm(vault, { recursive: true, force: true })
 })
 
-const TESTO = "Milena Battaglia ha scritto della teoria polivagale. Il trauma causa dissociazione."
+const TESTO = "Anna Rossi ha scritto della teoria polivagale. Il trauma causa dissociazione."
 
 describe("il JSON del modello", () => {
   it("si estrae anche avvolto nei backtick", () => {
@@ -44,12 +44,12 @@ describe("⛔ si tiene solo ciò che compare alla lettera", () => {
   it("scarta le entità inventate", () => {
     const r = soloVerificate(
       [
-        { testo: "Milena Battaglia", tipo: "persona" },
+        { testo: "Anna Rossi", tipo: "persona" },
         { testo: "Sigmund Freud", tipo: "persona" }, // mai nominato
       ],
       TESTO,
     )
-    expect(r.map((e) => e.testo)).toEqual(["Milena Battaglia"])
+    expect(r.map((e) => e.testo)).toEqual(["Anna Rossi"])
   })
 
   it("ignora gli accenti e gli spazi doppi, che non sono invenzioni", () => {
@@ -81,7 +81,7 @@ describe("il giudizio sugli archi", () => {
   it("tiene solo quelli promossi, e l'indice deve tornare", async () => {
     const archi = [
       { da: "trauma", a: "dissociazione", tipo: "causa", prova: "Il trauma causa dissociazione" },
-      { da: "Milena", a: "teoria", tipo: "causa", prova: "Milena insegna la teoria" },
+      { da: "Anna", a: "teoria", tipo: "causa", prova: "Anna insegna la teoria" },
     ]
     const r = await giudicaArchi(archi, async () =>
       JSON.stringify({ esiti: [{ i: 0, sostiene: true }, { i: 1, sostiene: false }] }))
