@@ -357,6 +357,32 @@ export function vectorClearChunks(vault: string): Promise<void> {
 const EMBED_TIMEOUT_MS = 90_000
 
 /**
+ * Il tetto di un singolo pezzo, in BYTE. `text-embedding-3-small` rifiuta ogni
+ * input oltre 8.192 token con un 400, e il pezzo — con lui tutta la pagina —
+ * resta fuori dall'indice, ritentato a vuoto a ogni giro. Succede sul testo OCR
+ * senza a capo, dove il frazionatore non trova dove tagliare.
+ *
+ * In byte e non in caratteri perche' e' l'unica misura che garantisce il
+ * limite: con un tokenizer a byte ogni token vale almeno un byte, quindi 8.000
+ * byte sono al massimo 8.000 token. Un tetto in caratteri non lo garantisce:
+ * un carattere UTF-8 puo' valere fino a quattro token.
+ *
+ * ponytail: si tronca, non si spezza. Un pezzo da piu' di 8 KB e' gia' un pezzo
+ * sbagliato del frazionatore (la media su questo vault e' 928 caratteri), e la
+ * sua testa ne porta il senso. Se un giorno servisse la coda, il posto giusto e'
+ * il frazionatore, non qui.
+ */
+const PEZZO_MAX_BYTE = 8_000
+
+export function entroIlLimite(testo: string): string {
+  const b = Buffer.from(testo, "utf8")
+  if (b.length <= PEZZO_MAX_BYTE) return testo
+  // `toString` su un taglio a meta' di un carattere multibyte lascia un solo
+  // carattere di sostituzione in fondo: innocuo per l'embedding.
+  return b.subarray(0, PEZZO_MAX_BYTE).toString("utf8")
+}
+
+/**
  * Embed texts through an OpenAI-compatible `/v1/embeddings` endpoint (OpenAI,
  * Gemini openai-compat, Voyage, Jina, local servers…). `cfg` is the app's
  * EmbeddingConfig (endpoint, model, apiKey, outputDimensionality, extraHeaders).
@@ -364,7 +390,7 @@ const EMBED_TIMEOUT_MS = 90_000
 export async function embedTexts(texts: string[], cfg: Record<string, any>): Promise<number[][]> {
   if (!texts.length) return []
   if (!cfg?.endpoint) throw new Error("embedding: no endpoint configured")
-  const body: Record<string, unknown> = { model: cfg.model, input: texts }
+  const body: Record<string, unknown> = { model: cfg.model, input: texts.map(entroIlLimite) }
   if (cfg.outputDimensionality) body.dimensions = cfg.outputDimensionality
   const headers: Record<string, string> = {
     "content-type": "application/json",

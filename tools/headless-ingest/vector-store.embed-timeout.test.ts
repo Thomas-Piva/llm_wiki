@@ -50,3 +50,36 @@ describe("embedTexts", () => {
     expect(chiamate).toBe(1)
   })
 })
+
+describe("entroIlLimite", () => {
+  it("lascia stare i pezzi normali", async () => {
+    const { entroIlLimite } = await import("./vector-store")
+    const t = "un pezzo normale di qualche centinaio di caratteri ".repeat(10)
+    expect(entroIlLimite(t)).toBe(t)
+  })
+
+  it("taglia un pezzo enorme sotto gli 8.000 byte", async () => {
+    const { entroIlLimite } = await import("./vector-store")
+    const t = "x".repeat(50_000)
+    expect(Buffer.byteLength(entroIlLimite(t), "utf8")).toBeLessThanOrEqual(8_000)
+  })
+
+  // Il caso che un tetto in CARATTERI non coprirebbe: 8.000 caratteri da 4
+  // byte sono 32.000 byte, quindi fino a 32.000 token.
+  it("misura in byte: 8.000 caratteri multibyte vengono tagliati lo stesso", async () => {
+    const { entroIlLimite } = await import("./vector-store")
+    const t = "𝔄".repeat(8_000) // 4 byte l'uno
+    expect(t.length).toBeGreaterThanOrEqual(8_000)
+    expect(Buffer.byteLength(entroIlLimite(t), "utf8")).toBeLessThanOrEqual(8_000)
+  })
+
+  it("e' davvero applicato alla richiesta che parte", async () => {
+    let corpo: any
+    globalThis.fetch = (async (_u: any, o: any) => {
+      corpo = JSON.parse(o.body)
+      return new Response(JSON.stringify({ data: [{ embedding: [1] }] }), { status: 200 })
+    }) as any
+    await embedTexts(["y".repeat(30_000)], { endpoint: "http://x", model: "m" })
+    expect(Buffer.byteLength(corpo.input[0], "utf8")).toBeLessThanOrEqual(8_000)
+  })
+})
