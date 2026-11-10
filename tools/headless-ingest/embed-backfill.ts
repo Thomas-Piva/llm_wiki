@@ -234,8 +234,30 @@ async function main() {
   // Una lettura sola dei page_id all'avvio (secondi su 360k righe) rende il
   // file di stato un'ottimizzazione invece che l'unica fonte, e il lavoro
   // doppio sparisce.
-  for (const id of await pagineGiaIndicizzate(vault)) done.add(id)
+  //
+  // ⚠️ E quando l'indice si legge, conta SOLO l'indice. Questa riga era
+  // un'unione — "fatto" se nel file di stato OPPURE nell'indice — e cosi' il
+  // file di stato poteva tenere fuori per sempre pagine che nell'indice non ci
+  // sono. Misurato l'8/11/2026 sul vault della cliente: **7.654 pagine** che il
+  // file di stato dava per fatte e che nell'indice non avevano un solo vettore.
+  // Erano concetti, entita', documenti e diario — la parte sintetizzata del
+  // vault — indicizzati ad agosto nell'indice vecchio a 384 dimensioni; quando
+  // l'indice e' stato sostituito con quello a 1536, il file di stato se le
+  // ricordava ancora. Per tre settimane la ricerca per significato non ha visto
+  // nessun concetto. Nessun errore: solo risultati che mancavano.
+  //
+  // Il file di stato resta il ripiego quando l'indice non si legge, che e'
+  // esattamente il caso per cui esiste.
+  const nellIndice = await pagineGiaIndicizzate(vault)
+  if (nellIndice.size > 0) {
+    done.clear()
+    for (const id of nellIndice) done.add(id)
+  }
   let todo = pages.filter((p) => !done.has(p.pageId))
+  // `done` contiene anche id di pagine che non esistono piu' (cancellate, o
+  // rinominate): contarli dava riepiloghi impossibili, `52275/51218
+  // indicizzate · -1057 rimaste`. Si contano solo le pagine che ci sono.
+  const fatteFraLeEsistenti = () => pages.reduce((n, p) => n + (done.has(p.pageId) ? 1 : 0), 0)
   let rimandate = 0
   if (maxKb > 0) {
     const prima = todo.length
@@ -251,7 +273,7 @@ async function main() {
   }
 
   console.error(
-    `[backfill] ${pages.length} pagine · ${done.size} già fatte · ${todo.length} da fare` +
+    `[backfill] ${pages.length} pagine · ${fatteFraLeEsistenti()} già fatte · ${todo.length} da fare` +
     (scartate ? ` · ${scartate} derivate escluse` : "") +
     (rimandate ? ` · ${rimandate} sopra ${maxKb} KB rimandate` : "") +
     ` · ${concorrenza} in parallelo` +
@@ -352,8 +374,8 @@ async function main() {
     }
     if (fatte % saveEvery === 0) {
       await writeState(vault, { ...state, done: [...done] })
-      console.error(`[backfill] ${done.size}/${pages.length} ` +
-        `(${((done.size / pages.length) * 100).toFixed(1)}%) · ` +
+      console.error(`[backfill] ${fatteFraLeEsistenti()}/${pages.length} ` +
+        `(${((fatteFraLeEsistenti() / pages.length) * 100).toFixed(1)}%) · ` +
         `${Object.keys(state.failed).length} falliti · carico ${loadAvg1().toFixed(2)}`)
     }
   }
@@ -382,9 +404,9 @@ async function main() {
   } else {
     console.error("[backfill] niente indicizzato: salto la compattazione")
   }
-  const rimasti = pages.length - done.size
+  const rimasti = pages.length - fatteFraLeEsistenti()
   console.error(
-    `[backfill] fine: ${done.size}/${pages.length} indicizzate · ` +
+    `[backfill] fine: ${fatteFraLeEsistenti()}/${pages.length} indicizzate · ` +
     `${Object.keys(state.failed).length} falliti · ${rimasti} rimaste`,
   )
   if (rimasti === 0) {

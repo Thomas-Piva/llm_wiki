@@ -90,7 +90,31 @@ async function walkFiles(dir: string, acc: string[]): Promise<void> {
 export async function enqueueSources(project: string): Promise<number> {
   const sourcesRoot = join(project, SOURCES_REL)
   const files: string[] = []
-  await walkFiles(sourcesRoot, files)
+  // ⚠️ `raw/sources/dropbox/` non si scansiona da qui, se il vault ha un
+  // registro delle impronte. Su quel vault la cartella e' fatta di montaggi del
+  // Dropbox della cliente, che lei riorganizza: sposta, rinomina, copia. Un file
+  // spostato ha un percorso nuovo, e un confronto per percorso — l'unico che
+  // questa funzione sa fare — lo prende per nuovo e lo reingerisce: seconda
+  // pagina identica, secondo embedding pagato.
+  //
+  // Sui file del Dropbox decide SOLO il giro notturno (`impronte.py`), che li
+  // riconosce dall'impronta del contenuto. Questa funzione — dietro al pulsante
+  // «Refresh», a `rebuild_wiki_index`, all'API — continua a valere per tutto il
+  // resto di `raw/sources`. E smette di camminare 45.000 file attraverso i
+  // montaggi a ogni clic.
+  const dropboxGestitoAParte = await fs
+    .access(join(project, ".llm-wiki", "dropbox-impronte.tsv"))
+    .then(() => true, () => false)
+  if (dropboxGestitoAParte) {
+    for (const e of await fs.readdir(sourcesRoot, { withFileTypes: true }).catch(() => [])) {
+      if (e.name.startsWith(".") || e.name === "dropbox") continue
+      const full = join(sourcesRoot, e.name)
+      if (e.isDirectory()) await walkFiles(full, files)
+      else if (e.isFile()) files.push(full)
+    }
+  } else {
+    await walkFiles(sourcesRoot, files)
+  }
 
   const existing = await readQueue(project)
   const knownIds = new Set(existing.map((t) => t.id))

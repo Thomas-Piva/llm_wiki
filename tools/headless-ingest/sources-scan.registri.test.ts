@@ -63,3 +63,18 @@ describe("enqueueSources e i registri", () => {
     expect(await enqueueSources(v)).toBe(0)
   })
 })
+
+describe("enqueueSources e il Dropbox gestito per impronta", () => {
+  it("con il registro delle impronte NON tocca raw/sources/dropbox, il resto si'", async () => {
+    const v = await vault(["dropbox/A/spostato-da-milena.pdf", "caricati/nuovo-dalla-ui.pdf"])
+    await writeFile(join(v, ".llm-wiki/dropbox-impronte.tsv"), "h\t1\tdropbox/A/qualcosa.pdf\n")
+    expect(await enqueueSources(v)).toBe(1)
+    const q = await readQueue(v)
+    expect(q.map((t) => t.sourcePath)).toEqual(["raw/sources/caricati/nuovo-dalla-ui.pdf"])
+  })
+
+  it("senza registro delle impronte il Dropbox si scansiona come prima", async () => {
+    const v = await vault(["dropbox/A/x.pdf", "caricati/y.pdf"])
+    expect(await enqueueSources(v)).toBe(2)
+  })
+})
