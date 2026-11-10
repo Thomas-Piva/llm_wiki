@@ -225,25 +225,51 @@ async function pageLinks(vault: string, filePath: string) {
   return { outgoing, backlinks, missing }
 }
 
-const LINK_RE = /\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g
-
-// Cache the batch so repeated graph opens cost the VPS ~0: build once, serve
-// cached for TTL. The heavy force-layout runs in the browser, not here.
+// Cache the batch so repeated opens cost the VPS ~0: build once, serve cached for TTL.
 const GRAPH_TTL_MS = 15 * 60 * 1000 // 15 min — was 2 min, caused 10-100 MB I/O burst every 120s
 const GRAPH_FILE_READ_CONCURRENCY = 16 // same as desktop (wiki-graph.ts:33)
 const graphCache = new Map<string, { ts: number; data: unknown }>()
 
-/** Read every wiki page ONCE, server-side, and return the graph node data
- *  ({id,label,type,path,links}). One HTTP call replaces ~1600 read_file calls,
- *  so the web graph/tree loads fast instead of round-tripping per file. */
+/**
+ * Bytes read from the top of each page. Frontmatter (type, tags, title) and the
+ * first heading live there; nothing else in this payload needs the body.
+ */
+const HEAD_BYTES = 4096
+
+async function readHead(full: string): Promise<string> {
+  let fh: Awaited<ReturnType<typeof fs.open>> | undefined
+  try {
+    fh = await fs.open(full, "r")
+    const buf = Buffer.alloc(HEAD_BYTES)
+    const { bytesRead } = await fh.read(buf, 0, HEAD_BYTES, 0)
+    return buf.toString("utf8", 0, bytesRead)
+  } catch {
+    return ""
+  } finally {
+    await fh?.close().catch(() => {})
+  }
+}
+
+/** Fresh copy: a regex slice can keep its whole parent string alive. */
+const detached = (s: string): string => Buffer.from(s, "utf8").toString("utf8")
+
+/**
+ * One call returning {id,label,type,path,tags,links} for every wiki page — the
+ * web page tree needs it instead of ~1 read_file per page.
+ *
+ * ⚠️ Reads only the HEAD of each page and returns `links: []`. The previous
+ * version read every page in full to collect wikilinks for the in-app graph.
+ * On a vault of 51k pages / 2.8 GB of markdown (single pages up to 46 MB) that
+ * needed more than 1.5 GB, so the web server (capped at 600 MB) was OOM-killed
+ * on every load and the page tree showed "no wiki pages". The graph is better
+ * served by Obsidian on the synced vault; the in-app graph gets nodes only.
+ */
 async function wikiGraphBatch(vault: string) {
   const cached = graphCache.get(vault)
   if (cached && Date.now() - cached.ts < GRAPH_TTL_MS) return cached.data
 
   const wiki = join(vault, "wiki")
   const mdFiles: string[] = []
-
-  // Phase 1: collect paths (cheap — readdir only, no file reads)
   const collectPaths = async (dir: string) => {
     let es: Awaited<ReturnType<typeof fs.readdir>>
     try { es = await fs.readdir(dir, { withFileTypes: true }) } catch { return }
@@ -256,25 +282,22 @@ async function wikiGraphBatch(vault: string) {
   }
   await collectPaths(wiki)
 
-  // Phase 2: read files with concurrency limit
   const out: Array<{ id: string; label: string; type: string; path: string; links: string[]; tags: string[] }> = []
   for (let i = 0; i < mdFiles.length; i += GRAPH_FILE_READ_CONCURRENCY) {
     const batch = mdFiles.slice(i, i + GRAPH_FILE_READ_CONCURRENCY)
     const results = await Promise.all(batch.map(async (full) => {
-      const content = await fs.readFile(full, "utf8").catch(() => "")
+      const head = await readHead(full)
       const name = full.split("/").pop()!
-      const fm = /^---\n([\s\S]*?)\n---/.exec(content)
+      const fm = /^---\n([\s\S]*?)\n---/.exec(head)
       let type = "other"
       const tags: string[] = []
       if (fm) {
         const t = /^type:\s*["']?([^"'\n]+)/m.exec(fm[1])
-        if (t) type = t[1].trim().toLowerCase()
+        if (t) type = detached(t[1].trim().toLowerCase())
         const tg = /^tags:\s*\[(.+?)\]/m.exec(fm[1])
-        if (tg) tags.push(...tg[1].split(",").map((x) => x.trim().replace(/["']/g, "")))
+        if (tg) tags.push(...tg[1].split(",").map((x) => detached(x.trim().replace(/["']/g, ""))))
       }
-      const links: string[] = []
-      for (const m of content.matchAll(LINK_RE)) links.push(m[1].trim())
-      return { id: name.replace(/\.md$/, ""), label: titleFrom(content, full), type, path: full, links, tags }
+      return { id: name.replace(/\.md$/, ""), label: detached(titleFrom(head, full)), type, path: full, links: [], tags }
     }))
     out.push(...results)
   }
