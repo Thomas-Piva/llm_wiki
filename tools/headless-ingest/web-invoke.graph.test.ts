@@ -3,7 +3,7 @@
  * solo la testa delle pagine: leggerle intere su un vault grande faceva morire
  * il server per memoria e l'albero restava vuoto.
  */
-import { afterEach, describe, expect, it } from "bun:test"
+import { afterEach, describe, expect, it, setSystemTime } from "bun:test"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -26,5 +26,35 @@ describe("wiki_graph_batch", () => {
     expect(nodi[0]).toMatchObject({
       id: "pagina", label: "Estratto conto marzo", type: "source", tags: ["banca", "2024"], links: [],
     })
+  })
+})
+
+describe("wiki_graph_batch e la cache", () => {
+  afterEach(() => setSystemTime())
+
+  it("scaduta: risponde subito con la copia vecchia e la rifà in sottofondo", async () => {
+    radice = await mkdtemp(join(tmpdir(), "grafo-swr-"))
+    await mkdir(join(radice, "wiki"), { recursive: true })
+    await writeFile(join(radice, "wiki/a.md"), "# A")
+    const ids = (r: unknown) => (r as any[]).map((n) => n.id).sort()
+
+    const primo = await dispatchInvoke("wiki_graph_batch", {}, radice)
+    expect(ids(primo)).toEqual(["a"])
+    await writeFile(join(radice, "wiki/b.md"), "# B")
+
+    // Dentro il TTL: stessa copia, nessuna ricostruzione.
+    expect(await dispatchInvoke("wiki_graph_batch", {}, radice)).toBe(primo)
+
+    // Oltre il TTL: la risposta e' ancora quella vecchia (nessuna attesa)...
+    setSystemTime(new Date(Date.now() + 16 * 60 * 1000))
+    expect(await dispatchInvoke("wiki_graph_batch", {}, radice)).toBe(primo)
+
+    // ...e poco dopo arriva quella nuova, ricostruita in sottofondo.
+    let dopo: unknown = primo
+    for (let i = 0; i < 50 && dopo === primo; i++) {
+      await new Promise((r) => setTimeout(r, 20))
+      dopo = await dispatchInvoke("wiki_graph_batch", {}, radice)
+    }
+    expect(ids(dopo)).toEqual(["a", "b"])
   })
 })

@@ -264,9 +264,27 @@ const detached = (s: string): string => Buffer.from(s, "utf8").toString("utf8")
  * on every load and the page tree showed "no wiki pages". The graph is better
  * served by Obsidian on the synced vault; the in-app graph gets nodes only.
  */
+/**
+ * Stale-while-revalidate: once built, every call answers from the cache at
+ * once; an expired entry is rebuilt in the background. Before, each expiry
+ * made the next visitor wait for a full rebuild (2.5 s warm, 17 s with a cold
+ * disk on a 51k-page vault) with an empty page tree.
+ */
+const graphRebuilding = new Set<string>()
+
 async function wikiGraphBatch(vault: string) {
   const cached = graphCache.get(vault)
-  if (cached && Date.now() - cached.ts < GRAPH_TTL_MS) return cached.data
+  if (!cached) return buildWikiGraph(vault)
+  if (Date.now() - cached.ts >= GRAPH_TTL_MS && !graphRebuilding.has(vault)) {
+    graphRebuilding.add(vault)
+    buildWikiGraph(vault)
+      .catch(() => {}) // keep serving the old copy; next expiry retries
+      .finally(() => graphRebuilding.delete(vault))
+  }
+  return cached.data
+}
+
+async function buildWikiGraph(vault: string) {
 
   const wiki = join(vault, "wiki")
   const mdFiles: string[] = []
